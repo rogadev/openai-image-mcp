@@ -3,11 +3,13 @@
 import argparse
 import getpass
 import sys
+import uuid
+from pathlib import Path
 from collections.abc import Callable
 
 import openai
 
-from openai_image_mcp import apps, key, models
+from openai_image_mcp import apps, images, key, models, settings
 
 Printer = Callable[[str], None]
 
@@ -77,6 +79,9 @@ def check(out: Printer = print) -> int:
         status = 1
     setting, source = models.configured_default()
     out(f"Default model: {setting} (from {source}).")
+    folder, folder_source = images.configured_output_dir()
+    out(f"Images folder: {folder} (from {folder_source}).")
+    out(f"Trigger mode: {settings.trigger_mode()}.")
     registered = apps.claude_code_registered()
     out(
         "Claude Code: "
@@ -148,12 +153,78 @@ def register(out: Printer = print) -> int:
     return 0
 
 
-def setup(out: Printer = print, read_secret: Callable[[str], str] = getpass.getpass) -> int:
+FOLDER_SHORTCUTS = ("desktop", "pictures")
+
+
+def resolve_folder(choice: str) -> Path:
+    """Turns "desktop", "pictures", or a path into an absolute folder path."""
+    lowered = choice.strip().strip('"').lower()
+    if lowered in FOLDER_SHORTCUTS:
+        return settings.known_folder(lowered)
+    return Path(choice.strip().strip('"')).expanduser().resolve()
+
+
+def set_folder(choice: str | None, out: Printer = print) -> int:
+    """Shows, sets, or resets the folder images are saved to."""
+    if choice is None:
+        folder, source = images.configured_output_dir()
+        out(f"Images are saved to {folder} (from {source}).")
+        return 0
+    if choice.strip().lower() == "default":
+        settings.clear_setting("output_dir")
+        out(f"Images will be saved to the default folder, {images.default_output_dir()}.")
+        return 0
+    folder = resolve_folder(choice)
+    try:
+        folder.mkdir(parents=True, exist_ok=True)
+        probe = folder / f".openai-image-mcp-{uuid.uuid4().hex}.tmp"
+        probe.write_bytes(b"")
+        probe.unlink()
+    except OSError as err:
+        out(f"Can't save images to {folder}: {err.strerror or err}. Nothing was changed.")
+        return 1
+    settings.save_setting("output_dir", str(folder))
+    out(f"Images will be saved to {folder}, starting with the next image. No restart needed.")
+    return 0
+
+
+def set_trigger(mode: str | None, out: Printer = print) -> int:
+    """Shows or sets whether Claude uses the tool on its own or only when asked by name."""
+    current = settings.trigger_mode()
+    if mode is None:
+        out(f"Trigger mode: {current}. {TRIGGER_HELP[current]}")
+        return 0
+    mode = mode.strip().lower()
+    if mode not in settings.TRIGGER_MODES:
+        out("Choose 'implicit' or 'explicit'.")
+        return 1
+    settings.save_setting("trigger", mode)
+    out(f"Trigger mode set to {mode}. {TRIGGER_HELP[mode]}")
+    out("Restart Claude Desktop and start a new Claude Code session for this to take effect.")
+    return 0
+
+
+TRIGGER_HELP = {
+    "implicit": "Claude uses OpenAI whenever an image would help.",
+    "explicit": "Claude uses OpenAI only when you ask for an OpenAI image by name; other visuals use Claude's own abilities.",
+}
+
+
+def setup(
+    out: Printer = print,
+    read_secret: Callable[[str], str] = getpass.getpass,
+    ask: Callable[[str], str] = input,
+) -> int:
     if key.stored_key() is None:
         if set_key(out, read_secret) != 0:
             return 1
     else:
         out(f"Key: {key.describe_key(key.stored_key())} is already stored. Run `uv run manage.py key` to replace it.")
+    current = images.output_dir()
+    out(f"Images will be saved to {current}.")
+    answer = ask("Press Enter to keep it, or type 'desktop', 'pictures', or a folder path: ").strip()
+    if answer and set_folder(answer, out) != 0:
+        return 1
     return register(out)
 
 
@@ -170,14 +241,14 @@ def uninstall(out: Printer = print, keep_key: bool = False) -> int:
         out("Key: kept, as asked.")
     else:
         out("Key: removed from your credential store." if key.delete_api_key() else "Key: none was stored.")
-    settings = models.settings_path()
-    if settings.exists():
-        settings.unlink()
+    settings_file = settings.settings_path()
+    if settings_file.exists():
+        settings_file.unlink()
         try:
-            settings.parent.rmdir()
+            settings_file.parent.rmdir()
         except OSError:
             pass
-        out(f"Settings: removed {settings}")
+        out(f"Settings: removed {settings_file}")
     out("")
     out("Left in place: your generated images (in your images folder) and this project folder.")
     out("To finish, quit Claude Desktop and close Claude Code sessions, then delete this folder.")
@@ -195,6 +266,14 @@ def main(argv: list[str] | None = None) -> int:
     models_cmd.add_argument("query", nargs="*", help="optional words to filter by, such as 2.5 or flare")
     model_cmd = commands.add_parser("model", help="choose the default model: 'latest' or an exact model ID")
     model_cmd.add_argument("model")
+    folder_cmd = commands.add_parser(
+        "folder", help="show or choose where images are saved: 'desktop', 'pictures', a path, or 'default'"
+    )
+    folder_cmd.add_argument("folder", nargs="?")
+    trigger_cmd = commands.add_parser(
+        "trigger", help="show or choose when Claude uses OpenAI: 'implicit' (on its own) or 'explicit' (only when asked)"
+    )
+    trigger_cmd.add_argument("mode", nargs="?")
     commands.add_parser("register", help="add the server to Claude Code and Claude Desktop")
     commands.add_parser("remove-key", help="delete the stored key")
     uninstall_cmd = commands.add_parser("uninstall", help="remove the server from both apps, and delete the key and settings")
@@ -211,6 +290,10 @@ def main(argv: list[str] | None = None) -> int:
                 return check()
             case "models":
                 return list_models(" ".join(args.query) or None)
+            case "trigger":
+                return set_trigger(args.mode)
+            case "folder":
+                return set_folder(args.folder)
             case "model":
                 return set_model(args.model)
             case "register":

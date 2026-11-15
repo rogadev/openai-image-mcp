@@ -14,7 +14,9 @@ from typing import Any, Literal
 
 from PIL import Image as PILImage
 
-DEFAULT_OUTPUT_DIR = Path.home() / "Pictures" / "Claude Images"
+from openai_image_mcp import settings
+
+OUTPUT_SUBFOLDER = "Claude Images"
 
 # Longest edge of the preview sent back into the chat. The full-resolution file
 # is always saved to disk; the preview only has to be big enough for Claude to
@@ -82,10 +84,23 @@ class SavedImage:
     preview_jpeg: bytes
 
 
+def default_output_dir() -> Path:
+    return settings.known_folder("pictures") / OUTPUT_SUBFOLDER
+
+
+def configured_output_dir() -> tuple[Path, str]:
+    """Returns (folder, where the choice came from), highest priority first:
+    the IMAGE_OUTPUT_DIR environment variable, the saved setting, then the default."""
+    if env := os.environ.get("IMAGE_OUTPUT_DIR"):
+        return Path(env).expanduser(), "the IMAGE_OUTPUT_DIR environment variable"
+    if saved := settings.read_settings().get("output_dir"):
+        return Path(saved), "your saved setting"
+    return default_output_dir(), "the built-in default"
+
+
 def output_dir() -> Path:
-    """Returns the folder images are saved to, from IMAGE_OUTPUT_DIR or the default."""
-    configured = os.environ.get("IMAGE_OUTPUT_DIR")
-    return Path(configured).expanduser() if configured else DEFAULT_OUTPUT_DIR
+    """The folder images are saved to. Read on every request, so a change applies at once."""
+    return configured_output_dir()[0]
 
 
 def validate_size(size: str) -> str:

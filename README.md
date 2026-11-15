@@ -1,6 +1,6 @@
 # OpenAI Image Generation for Claude
 
-**Generate and edit images with OpenAI right inside Claude.** This free, open-source add-on lets Claude Desktop and Claude Code create pictures with OpenAI's GPT Image models (the successor to DALL·E). Ask Claude for "a watercolor fox in the snow" and the image shows up in your chat and is saved to your Pictures folder. It runs entirely on your own computer as a local MCP server and uses your own OpenAI API key, so there's no website to sign up for, nothing hosted online, and no middleman between you and OpenAI.
+**Generate and edit images with OpenAI right inside Claude.** This free, open-source add-on lets Claude Desktop and Claude Code create pictures with OpenAI's GPT Image models (the successor to DALL·E). Ask Claude for "a watercolor fox in the snow" and the image shows up in your chat and is saved to a folder you choose. It runs entirely on your own computer as a local MCP server and uses your own OpenAI API key, so there's no website to sign up for, nothing hosted online, and no middleman between you and OpenAI.
 
 If you've been looking for a way to make AI images in Claude, use ChatGPT's image generator from Claude, or add text-to-image generation to Claude Code, this is it.
 
@@ -12,6 +12,8 @@ If you've been looking for a way to make AI images in Claude, use ChatGPT's imag
 - [Using it](#using-it)
 - [Choosing a model](#choosing-a-model)
 - [Your API key](#your-api-key)
+- [Where images are saved](#where-images-are-saved)
+- [When Claude uses it](#when-claude-uses-it)
 - [Other settings](#other-settings)
 - [Uninstalling](#uninstalling)
 - [Troubleshooting](#troubleshooting)
@@ -102,11 +104,12 @@ uv sync
 uv run manage.py setup
 ```
 
-Setup does three things:
+Setup does four things:
 
 1. **Asks for your API key.** Paste it at the prompt; it stays hidden, and setup tells you how many characters it received. If Ctrl+V does nothing (common in the older Windows PowerShell window), right-click to paste. Setup asks OpenAI whether the key works before saving it, then stores it in Windows Credential Manager.
-2. **Adds the server to Claude Code** for all your projects, if Claude Code is installed.
-3. **Adds the server to Claude Desktop,** if it finds Claude Desktop's config file. It backs up the file first, as `claude_desktop_config.json.bak-openai-image-mcp`.
+2. **Asks where to save images.** Press Enter for the default (`Pictures\Claude Images`), or type `desktop`, `pictures`, or any folder path. You can change it later; see [Where images are saved](#where-images-are-saved).
+3. **Adds the server to Claude Code** for all your projects, if Claude Code is installed.
+4. **Adds the server to Claude Desktop,** if it finds Claude Desktop's config file. It backs up the file first, as `claude_desktop_config.json.bak-openai-image-mcp`.
 
 Then quit Claude Desktop completely (right-click its icon in the system tray and choose **Quit**; closing the window isn't enough) and open it again.
 
@@ -216,7 +219,7 @@ A few things worth knowing:
 - **Pinning is a choice, not a lock-in.** A pinned model stays your default until you change it, even after newer models come out.
 - **Dated IDs are fixed snapshots.** An ID such as `gpt-image-2-2026-04-01` never changes behavior; a plain ID such as `gpt-image-2.6-flare` may get quiet improvements from OpenAI.
 - **Older models may not support every option.** The server only sends the options you ask for, so the defaults work with any model. If you ask an old model for something it can't do (for example, a transparent background), OpenAI says so and Claude passes the message on.
-- **Your choice is saved** in `%APPDATA%\openai-image-mcp\settings.json` and shared by Claude Code and Claude Desktop.
+- **Your choice is saved** in `%APPDATA%\openai-image-mcp\settings.json`, along with your images folder, and shared by Claude Code and Claude Desktop.
 
 ## Your API key
 
@@ -260,13 +263,48 @@ The server keeps working but asks for a key the next time you request an image.
 
 If no key is stored in Credential Manager, the server uses the `OPENAI_API_KEY` environment variable. This is handy on a machine without a credential store, but less private: every program you run can see environment variables.
 
+## Where images are saved
+
+By default, images go to a `Claude Images` folder inside your Pictures folder. To choose another folder:
+
+```powershell
+uv run manage.py folder desktop          # straight onto your Desktop
+uv run manage.py folder pictures         # your Pictures folder itself
+uv run manage.py folder "D:\Art\AI"      # any folder; it's created if needed
+uv run manage.py folder default          # back to Pictures\Claude Images
+uv run manage.py folder                  # show the current folder
+```
+
+`desktop` and `pictures` find your real folders, even when Windows has moved them into OneDrive. The change applies from the next image, in both Claude Code and Claude Desktop, with no restart. The tool checks that it can write to the folder before saving your choice.
+
+Only you can change the folder. Claude can't, so nothing it reads can make it save files somewhere else.
+
+## When Claude uses it
+
+Claude has its own ways of making visuals: diagrams, charts, SVG graphics, and artifacts. You decide how OpenAI image generation fits alongside them:
+
+| Mode | What happens | Good for |
+|---|---|---|
+| `implicit` (default) | Claude uses OpenAI whenever it decides an image would help. | Making OpenAI your go-to image tool. |
+| `explicit` | Claude uses OpenAI only when you ask for it by name, for example "make an OpenAI image of...", "use GPT Image", or "use ChatGPT's image generator". For anything else, such as a README diagram or an icon, it uses its own abilities. | Keeping Claude's own visuals as the default and calling on OpenAI for photographic or product-style images. |
+
+```powershell
+uv run manage.py trigger explicit
+uv run manage.py trigger implicit
+uv run manage.py trigger            # show the current mode
+```
+
+Restart Claude Desktop and start a new Claude Code session after changing it, because Claude reads the tool's instructions when the app starts the server. In explicit mode, follow-up changes to an image OpenAI already made in the conversation ("make it black") still use OpenAI.
+
+Explicit mode works by changing the instructions Claude reads about the tool, which it follows reliably, but it's guidance rather than a hard lock. You still approve each tool call unless you've turned approvals off.
+
 ## Other settings
 
-Both settings are optional environment variables, set in the server's entry in each app.
+These optional environment variables, set in the server's entry in one app, override your saved choices for that app only.
 
 | Variable | Default | What it does |
 |---|---|---|
-| `IMAGE_OUTPUT_DIR` | `Pictures\Claude Images` in your user folder | Where images are saved. The folder is created if needed. |
+| `IMAGE_OUTPUT_DIR` | not set | Saves that app's images to this folder instead of your chosen one. |
 | `IMAGE_MODEL` | not set | Forces a model for that app, overriding the saved default. `latest` works here too. |
 
 **Claude Code:**
@@ -299,7 +337,7 @@ This removes everything the tool added outside its own folder:
 - the server entry in Claude Code
 - the server entry in Claude Desktop's config (after backing up the file)
 - your API key from Credential Manager, including any older copies
-- your saved model choice
+- your saved model, folder, and trigger choices
 
 It leaves your generated images where they are. To finish, quit Claude Desktop, close Claude Code sessions, and delete the `openai-image-mcp` folder. Add `--keep-key` if you're reinstalling and want to keep the key.
 
@@ -341,9 +379,11 @@ Run each as `uv run manage.py <command>` in the project folder.
 |---|---|
 | `setup` | Stores your key (if none is stored) and adds the server to both apps. Safe to run again. |
 | `key` | Adds or replaces your API key, after checking it with OpenAI. `--no-check` skips the check. |
-| `check` | Tests the stored key and shows the default model and which apps are set up. |
+| `check` | Tests the stored key and shows the default model, the images folder, and which apps are set up. |
 | `models [words]` | Lists the image models your key can use, newest first, optionally filtered. |
 | `model <id>` | Sets your default model: an exact ID to pin it, or `latest`. |
+| `folder [where]` | Shows or sets where images are saved: `desktop`, `pictures`, a folder path, or `default`. |
+| `trigger [mode]` | Shows or sets when Claude uses OpenAI: `implicit` (on its own) or `explicit` (only when you ask). |
 | `register` | Adds the server to both apps without touching the key. |
 | `remove-key` | Deletes the stored key. |
 | `uninstall` | Removes the server from both apps, and deletes the key and settings. `--keep-key` keeps the key. |

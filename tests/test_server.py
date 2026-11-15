@@ -100,3 +100,20 @@ def test_image_results_link_to_the_file_and_open_only_when_asked(monkeypatch, tm
     assert f"Folder: {tmp_path.as_uri()}" in text
     assert opened == ([saved[0].path] if open_after else [])
     assert ("Opened in the user's default image viewer." in text) is open_after
+
+
+@pytest.mark.parametrize("mode", ["implicit", "explicit"])
+def test_trigger_mode_shapes_what_claude_is_told(tmp_path, mode):
+    import json
+
+    settings_file = tmp_path / "settings.json"
+    settings_file.write_text(json.dumps({"trigger": mode}), encoding="utf-8")
+    env = server_env(tmp_path, OPENAI_IMAGE_MCP_SETTINGS=str(settings_file))
+
+    tools, _ = anyio.run(call_server, env)
+
+    by_name = {t.name: t.description or "" for t in tools.tools}
+    for name in ("generate_image", "edit_image"):
+        assert ("Explicit mode is on" in by_name[name]) is (mode == "explicit")
+    assert "Explicit mode is on" not in by_name["list_image_models"]
+    assert "edit_image with the saved path" not in by_name["generate_image"]
