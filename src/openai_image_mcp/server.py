@@ -3,14 +3,15 @@
 Runs over stdio: each Claude app starts it on demand and stops it on exit.
 """
 
+import os
 from datetime import datetime
 
 import openai
 from mcp.server.mcpserver import Image, MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 
-from openai_image_mcp import images
-from openai_image_mcp.key import MissingKeyError, load_api_key
+from openai_image_mcp import images, models
+from openai_image_mcp.key import SETUP_HINT, MissingKeyError, load_api_key
 
 # Generation can take up to about two minutes for complex prompts.
 OPENAI_TIMEOUT_SECONDS = 300
@@ -21,9 +22,12 @@ server = MCPServer(
         "Generates and edits images with OpenAI's Image API. Every image is saved to the "
         "user's image folder at full resolution; the chat receives a smaller preview plus the "
         "saved path. Use quality 'low' for quick drafts. Each call costs the user money, so "
-        "don't generate more images than asked for."
+        "don't generate more images than asked for. By default the newest image model is used; "
+        "list_image_models shows what the user's key can use, and set_default_model pins one."
     ),
 )
+
+resolver = models.ModelResolver()
 
 
 def _client() -> openai.OpenAI:
@@ -43,18 +47,26 @@ def _to_content(saved: list[images.SavedImage], model: str) -> list[str | Image]
     return content
 
 
-def _run(call, model: str) -> list[str | Image]:
+def _openai_errors(err: Exception) -> ToolError:
+    if isinstance(err, openai.AuthenticationError):
+        return ToolError(
+            "OpenAI rejected the stored API key. It may have expired or been revoked. "
+            f"To replace it, {SETUP_HINT}; the new key works on the next request, with no restart."
+        )
+    if isinstance(err, openai.NotFoundError):
+        return ToolError(f"OpenAI doesn't know that model, or this key can't use it: {err}")
+    return ToolError(f"OpenAI returned an error: {err}")
+
+
+def _run_image_call(call, requested_model: str | None) -> list[str | Image]:
+    client = _client()
+    model = resolver.resolve(client, requested_model)
     try:
-        return _to_content(call(), model)
+        return _to_content(call(client, model), model)
     except images.ImageRequestError as err:
         raise ToolError(str(err)) from err
-    except openai.AuthenticationError as err:
-        raise ToolError(
-            "OpenAI rejected the API key. Store a valid key with `uv run store_key.py` in the "
-            "openai-image-mcp folder, then restart the app."
-        ) from err
     except openai.APIError as err:
-        raise ToolError(f"OpenAI returned an error: {err}") from err
+        raise _openai_errors(err) from err
 
 
 @server.tool(structured_output=False)
@@ -77,12 +89,12 @@ def generate_image(
         background: "transparent" needs output_format "png" or "webp".
         output_format: File format of the saved image.
         n: Number of images, 1 to 4. Each one is billed.
-        model: Override the model, for example "gpt-image-2.6-sunburst" for detailed work.
+        model: A model ID for this request only. Leave empty to use the user's default
+            (the newest model unless they pinned one). See list_image_models.
     """
-    chosen = model or images.default_model()
-    return _run(
-        lambda: images.generate(
-            _client(),
+    return _run_image_call(
+        lambda client, chosen: images.generate(
+            client,
             prompt,
             size=size,
             quality=quality,
@@ -93,7 +105,7 @@ def generate_image(
             folder=images.output_dir(),
             now=datetime.now(),
         ),
-        chosen,
+        model,
     )
 
 
@@ -120,12 +132,11 @@ def edit_image(
         background: "transparent" needs output_format "png" or "webp".
         output_format: File format of the saved image.
         n: Number of results, 1 to 4. Each one is billed.
-        model: Override the model; "gpt-image-2.6-sunburst" is tuned for precise edits.
+        model: A model ID for this request only. Leave empty to use the user's default.
     """
-    chosen = model or images.default_model()
-    return _run(
-        lambda: images.edit(
-            _client(),
+    return _run_image_call(
+        lambda client, chosen: images.edit(
+            client,
             prompt,
             image_paths,
             mask_path=mask_path,
@@ -138,8 +149,80 @@ def edit_image(
             folder=images.output_dir(),
             now=datetime.now(),
         ),
-        chosen,
+        model,
     )
+
+
+def _model_overview(client: openai.OpenAI, query: str | None) -> str:
+    try:
+        available = resolver.available(client, refresh=True)
+    except openai.APIError as err:
+        raise _openai_errors(err) from err
+    setting, source = models.configured_default()
+    latest = models.pick_latest(available)
+    in_use = latest if setting == models.LATEST else setting
+    matches = models.search(available, query)
+
+    lines = [
+        f"Default setting: {setting} (from {source}).",
+        f"Model used when none is given: {in_use or models.FALLBACK_MODEL}.",
+        f"Newest available: {latest or 'none found'}.",
+        "",
+        f"Image models this key can use{f' matching {query!r}' if query else ''}, newest first:",
+    ]
+    if not matches:
+        lines.append("- none")
+    for model in matches:
+        tags = []
+        if model.id == latest:
+            tags.append("newest")
+        if model.id == in_use:
+            tags.append("current default")
+        if model.is_snapshot:
+            tags.append("fixed snapshot")
+        lines.append(f"- {model.id}" + (f" ({', '.join(tags)})" if tags else ""))
+    lines.append("")
+    lines.append("Prices differ by model; see https://openai.com/api/pricing/ for current rates.")
+    return "\n".join(lines)
+
+
+@server.tool()
+def list_image_models(query: str | None = None) -> str:
+    """Lists the OpenAI image models the user's API key can use, newest first.
+
+    Shows which model is used by default and whether the user pinned one.
+
+    Args:
+        query: Optional words to filter by, such as "2.5" or "flare".
+    """
+    return _model_overview(_client(), query)
+
+
+@server.tool()
+def set_default_model(model: str) -> str:
+    """Sets the model used when a request doesn't name one, and remembers it.
+
+    Only call this when the user asks to change or pin their default model.
+
+    Args:
+        model: "latest" to always use the newest model, or an exact model ID from
+            list_image_models to pin that model.
+    """
+    client = _client()
+    if model != models.LATEST:
+        try:
+            ids = {m.id for m in resolver.available(client, refresh=True)}
+        except openai.APIError as err:
+            raise _openai_errors(err) from err
+        if model not in ids:
+            raise ToolError(f"{model} isn't one of the image models this key can use. See list_image_models.")
+    models.save_default(model)
+    note = ""
+    if os.environ.get("IMAGE_MODEL"):
+        note = " Note: an IMAGE_MODEL environment variable is set for this app and takes priority."
+    if model == models.LATEST:
+        return "Default set to latest: each request uses the newest image model available." + note
+    return f"Default pinned to {model}. It stays until you change it." + note
 
 
 def main() -> None:

@@ -12,7 +12,6 @@ from typing import Any, Literal
 
 from PIL import Image as PILImage
 
-DEFAULT_MODEL = "gpt-image-2.6-flare"
 DEFAULT_OUTPUT_DIR = Path.home() / "Pictures" / "Claude Images"
 
 # Longest edge of the preview sent back into the chat. The full-resolution file
@@ -45,10 +44,6 @@ def output_dir() -> Path:
     return Path(configured).expanduser() if configured else DEFAULT_OUTPUT_DIR
 
 
-def default_model() -> str:
-    return os.environ.get("IMAGE_MODEL") or DEFAULT_MODEL
-
-
 def validate_size(size: str) -> str:
     """Checks a size string against OpenAI's rules for GPT-Image-2.5 and later.
 
@@ -74,6 +69,28 @@ def validate_size(size: str) -> str:
     if problems:
         raise ImageRequestError(f"Size {size} is not allowed: {'; '.join(problems)}.")
     return size
+
+
+def request_options(model: str, size: str, quality: str, background: str, output_format: str, n: int) -> dict[str, Any]:
+    """Builds the Image API arguments, sending only the options that differ from OpenAI's defaults.
+
+    Leaving defaults out keeps older or cheaper models working when they don't
+    support a newer option. DALL-E models return a URL unless asked for base64.
+    """
+    options: dict[str, Any] = {"model": model}
+    if size != "auto":
+        options["size"] = size
+    if quality != "auto":
+        options["quality"] = quality
+    if background != "auto":
+        options["background"] = background
+    if output_format != "png":
+        options["output_format"] = output_format
+    if n != 1:
+        options["n"] = n
+    if model.startswith("dall-e"):
+        options["response_format"] = "b64_json"
+    return options
 
 
 def validate_options(n: int, background: str, output_format: str) -> None:
@@ -149,13 +166,7 @@ def generate(
     validate_size(size)
     validate_options(n, background, output_format)
     response = client.images.generate(
-        model=model,
-        prompt=prompt,
-        size=size,
-        quality=quality,
-        background=background,
-        output_format=output_format,
-        n=n,
+        prompt=prompt, **request_options(model, size, quality, background, output_format, n)
     )
     return save_results(response, prompt, output_format, folder, now)
 
@@ -190,14 +201,9 @@ def edit(
     mask_handle = Path(mask_path).expanduser().open("rb") if mask_path else None
     try:
         kwargs: dict[str, Any] = {
-            "model": model,
             "prompt": prompt,
             "image": handles if len(handles) > 1 else handles[0],
-            "size": size,
-            "quality": quality,
-            "background": background,
-            "output_format": output_format,
-            "n": n,
+            **request_options(model, size, quality, background, output_format, n),
         }
         if mask_handle:
             kwargs["mask"] = mask_handle

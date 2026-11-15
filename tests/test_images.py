@@ -24,17 +24,16 @@ def fake_response(count=1, data=None):
 
 
 class FakeImages:
-    def __init__(self, count=1):
-        self.count = count
+    def __init__(self):
         self.calls = []
 
     def generate(self, **kwargs):
         self.calls.append(("generate", kwargs))
-        return fake_response(kwargs["n"])
+        return fake_response(kwargs.get("n", 1))
 
     def edit(self, **kwargs):
         self.calls.append(("edit", kwargs))
-        return fake_response(kwargs["n"])
+        return fake_response(kwargs.get("n", 1))
 
 
 class FakeClient:
@@ -96,7 +95,7 @@ def test_generate_saves_full_image_and_returns_small_preview(tmp_path):
         assert preview.format == "JPEG"
         assert max(preview.size) == images.PREVIEW_MAX_EDGE
     _, kwargs = client.images.calls[0]
-    assert kwargs["model"] == "m" and kwargs["quality"] == "low" and kwargs["n"] == 1
+    assert kwargs == {"prompt": "A red fox, watercolor!", "model": "m", "quality": "low"}
 
 
 def test_multiple_images_get_numbered_names(tmp_path):
@@ -153,12 +152,26 @@ def test_edit_reports_missing_files(tmp_path):
         )
 
 
-def test_output_dir_and_model_follow_environment(monkeypatch, tmp_path):
+def test_output_dir_follows_environment(monkeypatch, tmp_path):
     monkeypatch.delenv("IMAGE_OUTPUT_DIR", raising=False)
-    monkeypatch.delenv("IMAGE_MODEL", raising=False)
     assert images.output_dir() == images.DEFAULT_OUTPUT_DIR
-    assert images.default_model() == images.DEFAULT_MODEL
     monkeypatch.setenv("IMAGE_OUTPUT_DIR", str(tmp_path))
-    monkeypatch.setenv("IMAGE_MODEL", "gpt-image-2.6-sunburst")
     assert images.output_dir() == tmp_path
-    assert images.default_model() == "gpt-image-2.6-sunburst"
+
+
+def test_request_options_send_only_what_differs_from_defaults():
+    assert images.request_options("gpt-image-2.6-flare", "auto", "auto", "auto", "png", 1) == {
+        "model": "gpt-image-2.6-flare"
+    }
+    assert images.request_options("gpt-image-2.5-flare", "1536x1024", "high", "transparent", "webp", 2) == {
+        "model": "gpt-image-2.5-flare",
+        "size": "1536x1024",
+        "quality": "high",
+        "background": "transparent",
+        "output_format": "webp",
+        "n": 2,
+    }
+
+
+def test_dall_e_models_ask_for_base64():
+    assert images.request_options("dall-e-3", "auto", "auto", "auto", "png", 1)["response_format"] == "b64_json"
