@@ -162,8 +162,11 @@ def revision_label(source_name: str) -> str:
     stem = Path(source_name).stem
     match = _SAVED_NAME.match(stem)
     if match:
-        version = int(match["version"] or 1)
-        return f"{match['base']}-v{version + 1}"
+        # The base comes from a file name, so reduce it to the same safe characters a
+        # prompt slug uses, and keep both it and the counter to a sensible length.
+        base = re.sub(r"[^a-z0-9]+", "-", match["base"].lower()).strip("-")[:80] or "image"
+        version = min(int(match["version"] or 1), 9998)
+        return f"{base}-v{version + 1}"
     return f"{slugify(stem)}-edit"
 
 

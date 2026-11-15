@@ -265,3 +265,16 @@ def test_input_fidelity_is_sent_only_when_asked_for(tmp_path):
         output_format="png", n=1, model="gpt-image-1.5", folder=tmp_path / "out", now=NOW, input_fidelity="high",
     )
     assert client.images.calls[1][1]["input_fidelity"] == "high"
+
+
+@pytest.mark.parametrize(
+    ("source", "label"),
+    [
+        ("2026-11-15_143205_..png", "image-v2"),
+        ("2026-11-15_143205_Cat & Dog (Final!).png", "cat-dog-final-v2"),
+        ("2026-11-15_143205_" + "x" * 300 + ".png", "x" * 80 + "-v2"),
+        ("2026-11-15_143205_cat-v99999999999.png", "cat-v9999"),
+    ],
+)
+def test_revision_label_keeps_names_safe_and_short(source, label):
+    assert images.revision_label(source) == label
