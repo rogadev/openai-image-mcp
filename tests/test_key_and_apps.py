@@ -276,3 +276,17 @@ def test_setup_asks_for_the_folder(monkeypatch, tmp_path):
 
     assert admin.setup(lambda line: None, ask=lambda prompt: "") == 0
     assert images.output_dir() == tmp_path / "chosen", "Enter keeps the current folder"
+
+
+def test_trigger_command_shows_sets_and_validates():
+    from openai_image_mcp import settings
+
+    output = []
+    assert settings.trigger_mode() == "implicit"
+    assert admin.set_trigger("explicit", output.append) == 0
+    assert settings.trigger_mode() == "explicit"
+    assert "Restart Claude Desktop" in output[-1]
+    assert admin.set_trigger("sometimes", output.append) == 1
+    assert settings.trigger_mode() == "explicit"
+    admin.set_trigger(None, output.append)
+    assert output[-1].startswith("Trigger mode: explicit.")

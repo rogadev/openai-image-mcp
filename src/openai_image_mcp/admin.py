@@ -81,6 +81,7 @@ def check(out: Printer = print) -> int:
     out(f"Default model: {setting} (from {source}).")
     folder, folder_source = images.configured_output_dir()
     out(f"Images folder: {folder} (from {folder_source}).")
+    out(f"Trigger mode: {settings.trigger_mode()}.")
     registered = apps.claude_code_registered()
     out(
         "Claude Code: "
@@ -187,6 +188,28 @@ def set_folder(choice: str | None, out: Printer = print) -> int:
     return 0
 
 
+def set_trigger(mode: str | None, out: Printer = print) -> int:
+    """Shows or sets whether Claude uses the tool on its own or only when asked by name."""
+    current = settings.trigger_mode()
+    if mode is None:
+        out(f"Trigger mode: {current}. {TRIGGER_HELP[current]}")
+        return 0
+    mode = mode.strip().lower()
+    if mode not in settings.TRIGGER_MODES:
+        out("Choose 'implicit' or 'explicit'.")
+        return 1
+    settings.save_setting("trigger", mode)
+    out(f"Trigger mode set to {mode}. {TRIGGER_HELP[mode]}")
+    out("Restart Claude Desktop and start a new Claude Code session for this to take effect.")
+    return 0
+
+
+TRIGGER_HELP = {
+    "implicit": "Claude uses OpenAI whenever an image would help.",
+    "explicit": "Claude uses OpenAI only when you ask for an OpenAI image by name; other visuals use Claude's own abilities.",
+}
+
+
 def setup(
     out: Printer = print,
     read_secret: Callable[[str], str] = getpass.getpass,
@@ -247,6 +270,10 @@ def main(argv: list[str] | None = None) -> int:
         "folder", help="show or choose where images are saved: 'desktop', 'pictures', a path, or 'default'"
     )
     folder_cmd.add_argument("folder", nargs="?")
+    trigger_cmd = commands.add_parser(
+        "trigger", help="show or choose when Claude uses OpenAI: 'implicit' (on its own) or 'explicit' (only when asked)"
+    )
+    trigger_cmd.add_argument("mode", nargs="?")
     commands.add_parser("register", help="add the server to Claude Code and Claude Desktop")
     commands.add_parser("remove-key", help="delete the stored key")
     uninstall_cmd = commands.add_parser("uninstall", help="remove the server from both apps, and delete the key and settings")
@@ -263,6 +290,8 @@ def main(argv: list[str] | None = None) -> int:
                 return check()
             case "models":
                 return list_models(" ".join(args.query) or None)
+            case "trigger":
+                return set_trigger(args.mode)
             case "folder":
                 return set_folder(args.folder)
             case "model":

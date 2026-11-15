@@ -9,11 +9,24 @@ import openai
 from mcp.server.mcpserver import Image, MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 
-from openai_image_mcp import images, models
+from openai_image_mcp import images, models, settings
 from openai_image_mcp.key import SETUP_HINT, MissingKeyError, load_api_key, make_client
 
 # Generation can take up to about two minutes for complex prompts.
 OPENAI_TIMEOUT_SECONDS = 300
+
+# Read once at startup: the apps read tool descriptions when they start the server,
+# so changing the mode takes effect after the app restarts.
+EXPLICIT = settings.trigger_mode() == "explicit"
+
+EXPLICIT_RULE = (
+    "Explicit mode is on. Use generate_image or edit_image only when the user explicitly asks for "
+    "an image from OpenAI (for example \"OpenAI\", \"GPT Image\", \"ChatGPT image\", \"DALL-E\") or "
+    "names this tool. For any other visual, such as a diagram, chart, SVG, icon, artifact, or README "
+    "graphic, use your own built-in abilities and don't call these tools. Revising an image these tools "
+    "already made in this conversation counts as explicit. If you're unsure, ask the user whether they "
+    "want an OpenAI image."
+)
 
 server = MCPServer(
     name="openai-images",
@@ -31,8 +44,18 @@ server = MCPServer(
         "By default the newest image model is used; "
         "list_image_models shows what the user's key can use. To change their saved default, the "
         "user runs `uv run manage.py model <id>` themselves."
+        + ("\n\n" + EXPLICIT_RULE if EXPLICIT else "")
     ),
 )
+
+
+def _image_tool(fn):
+    """Registers an image tool, putting the explicit-mode rule first in its description."""
+    description = fn.__doc__ or ""
+    if EXPLICIT:
+        description = f"{EXPLICIT_RULE}\n\n{description}"
+    return server.tool(structured_output=False, description=description)(fn)
+
 
 resolver = models.ModelResolver()
 
@@ -88,7 +111,7 @@ def _run_image_call(call, requested_model: str | None, open_after: bool) -> list
         raise _openai_errors(err) from err
 
 
-@server.tool(structured_output=False)
+@_image_tool
 def generate_image(
     prompt: str,
     size: str = "auto",
@@ -136,7 +159,7 @@ def generate_image(
     )
 
 
-@server.tool(structured_output=False)
+@_image_tool
 def edit_image(
     prompt: str,
     image_paths: list[str],

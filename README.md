@@ -13,6 +13,7 @@ If you've been looking for a way to make AI images in Claude, use ChatGPT's imag
 - [Choosing a model](#choosing-a-model)
 - [Your API key](#your-api-key)
 - [Where images are saved](#where-images-are-saved)
+- [When Claude uses it](#when-claude-uses-it)
 - [Other settings](#other-settings)
 - [Uninstalling](#uninstalling)
 - [Troubleshooting](#troubleshooting)
@@ -278,6 +279,25 @@ uv run manage.py folder                  # show the current folder
 
 Only you can change the folder. Claude can't, so nothing it reads can make it save files somewhere else.
 
+## When Claude uses it
+
+Claude has its own ways of making visuals: diagrams, charts, SVG graphics, and artifacts. You decide how OpenAI image generation fits alongside them:
+
+| Mode | What happens | Good for |
+|---|---|---|
+| `implicit` (default) | Claude uses OpenAI whenever it decides an image would help. | Making OpenAI your go-to image tool. |
+| `explicit` | Claude uses OpenAI only when you ask for it by name, for example "make an OpenAI image of...", "use GPT Image", or "use ChatGPT's image generator". For anything else, such as a README diagram or an icon, it uses its own abilities. | Keeping Claude's own visuals as the default and calling on OpenAI for photographic or product-style images. |
+
+```powershell
+uv run manage.py trigger explicit
+uv run manage.py trigger implicit
+uv run manage.py trigger            # show the current mode
+```
+
+Restart Claude Desktop and start a new Claude Code session after changing it, because Claude reads the tool's instructions when the app starts the server. In explicit mode, follow-up changes to an image OpenAI already made in the conversation ("make it black") still use OpenAI.
+
+Explicit mode works by changing the instructions Claude reads about the tool, which it follows reliably, but it's guidance rather than a hard lock. You still approve each tool call unless you've turned approvals off.
+
 ## Other settings
 
 These optional environment variables, set in the server's entry in one app, override your saved choices for that app only.
@@ -317,7 +337,7 @@ This removes everything the tool added outside its own folder:
 - the server entry in Claude Code
 - the server entry in Claude Desktop's config (after backing up the file)
 - your API key from Credential Manager, including any older copies
-- your saved model and folder choices
+- your saved model, folder, and trigger choices
 
 It leaves your generated images where they are. To finish, quit Claude Desktop, close Claude Code sessions, and delete the `openai-image-mcp` folder. Add `--keep-key` if you're reinstalling and want to keep the key.
 
@@ -363,6 +383,7 @@ Run each as `uv run manage.py <command>` in the project folder.
 | `models [words]` | Lists the image models your key can use, newest first, optionally filtered. |
 | `model <id>` | Sets your default model: an exact ID to pin it, or `latest`. |
 | `folder [where]` | Shows or sets where images are saved: `desktop`, `pictures`, a folder path, or `default`. |
+| `trigger [mode]` | Shows or sets when Claude uses OpenAI: `implicit` (on its own) or `explicit` (only when you ask). |
 | `register` | Adds the server to both apps without touching the key. |
 | `remove-key` | Deletes the stored key. |
 | `uninstall` | Removes the server from both apps, and deletes the key and settings. `--keep-key` keeps the key. |

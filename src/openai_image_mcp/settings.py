@@ -57,3 +57,13 @@ def known_folder(name: str) -> Path:
         if ctypes.windll.shell32.SHGetFolderPathW(None, csidl, None, 0, buffer) == 0 and buffer.value:
             return Path(buffer.value)
     return Path.home() / {"desktop": "Desktop", "pictures": "Pictures"}[name]
+
+
+TRIGGER_MODES = ("implicit", "explicit")
+
+
+def trigger_mode() -> str:
+    """"implicit" (Claude uses the tool whenever an image would help) or "explicit"
+    (only when the user asks for an OpenAI image by name)."""
+    mode = read_settings().get("trigger")
+    return mode if mode in TRIGGER_MODES else "implicit"
