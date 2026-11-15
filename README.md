@@ -78,6 +78,21 @@ The tests never call OpenAI or read your stored key.
 
 **Claude Desktop:** after a full restart, open **+**, then **Connectors**, then **Manage connectors**, and check that `openai-images` lists both tools. Ask for the same test image. Server logs are in the app's `logs` folder as `mcp-server-openai-images.log`.
 
+## Branches and releases
+
+Work happens on `dev`. Changes reach `main` only through a pull request from `dev`, merged with a merge commit once CI is green.
+
+- **CI** (`.github/workflows/ci.yml`) runs the tests on Windows for every pull request into `main` and every push to `dev`, and fails a pull request into `main` that doesn't come from `dev`.
+- **Release** (`.github/workflows/release.yml`) runs on every merge to `main`. It re-runs the tests, picks the next version from the commits since the last `vX.Y.Z` tag, and publishes a GitHub release with grouped notes.
+
+| Change | How to get it |
+|---|---|
+| Patch (`1.2.3` to `1.2.4`) | The default: `fix:`, `docs:`, `chore:`, and any other commits. |
+| Minor (`1.2.3` to `1.3.0`) | At least one `feat:` commit since the last release. |
+| Major (`1.2.3` to `2.0.0`) | Add the `release:major` label to the `dev`-to-`main` pull request before merging. Nothing else bumps major, including a `!` or `BREAKING CHANGE` in a commit. |
+
+The tag is the version of record, so `pyproject.toml` keeps its seed version and nothing is committed back to `main`. A failed release can be re-run from the Actions tab; a commit that's already tagged publishes nothing.
+
 ## Cost and speed
 
 Each image is billed to your OpenAI account; GPT-Image-2.6 charges about $30 per million output tokens, so a single image costs cents to tens of cents depending on size and quality. Complex prompts can take up to two minutes. Use `quality: "low"` for drafts.

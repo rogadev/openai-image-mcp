@@ -1,5 +1,7 @@
 [project]
 name = "openai-image-mcp"
+# Releases are versioned by their vX.Y.Z git tags, not this field. It only seeds the
+# first release; .github/scripts/release_version.py works out every later one.
 version = "0.1.0"
 description = "Local MCP server that lets Claude Code and Claude Desktop generate images with OpenAI's Image API"
 readme = "README.md"
