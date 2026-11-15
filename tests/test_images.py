@@ -285,3 +285,14 @@ def test_input_fidelity_is_sent_only_when_asked_for(tmp_path):
 )
 def test_revision_label_keeps_names_safe_and_short(source, label):
     assert images.revision_label(source) == label
+
+
+@pytest.mark.parametrize("bad", ["relative/folder", 42, ["C:/x"]])
+def test_output_dir_ignores_a_saved_value_that_isnt_a_full_path(monkeypatch, bad):
+    from openai_image_mcp import settings
+
+    monkeypatch.delenv("IMAGE_OUTPUT_DIR", raising=False)
+    settings.save_setting("output_dir", bad)
+    folder, source = images.configured_output_dir()
+    assert folder == images.default_output_dir()
+    assert "isn't a full folder path" in source

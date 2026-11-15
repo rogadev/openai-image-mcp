@@ -91,10 +91,18 @@ def default_output_dir() -> Path:
 def configured_output_dir() -> tuple[Path, str]:
     """Returns (folder, where the choice came from), highest priority first:
     the IMAGE_OUTPUT_DIR environment variable, the saved setting, then the default."""
-    if env := os.environ.get("IMAGE_OUTPUT_DIR"):
-        return Path(env).expanduser(), "the IMAGE_OUTPUT_DIR environment variable"
-    if saved := settings.read_settings().get("output_dir"):
-        return Path(saved), "your saved setting"
+    for value, source in (
+        (os.environ.get("IMAGE_OUTPUT_DIR"), "the IMAGE_OUTPUT_DIR environment variable"),
+        (settings.read_settings().get("output_dir"), "your saved setting"),
+    ):
+        if not value:
+            continue
+        # Only a full folder path counts; anything else (a relative path, or a value that
+        # isn't text in a hand-edited settings file) falls back rather than guessing.
+        folder = Path(value).expanduser() if isinstance(value, str) else None
+        if folder is not None and folder.is_absolute():
+            return folder, source
+        return default_output_dir(), f"the built-in default, because {source} isn't a full folder path"
     return default_output_dir(), "the built-in default"
 
 
