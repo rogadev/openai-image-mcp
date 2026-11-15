@@ -3,6 +3,7 @@
 Runs over stdio: each Claude app starts it on demand and stops it on exit.
 """
 
+import sys
 from datetime import datetime
 
 import openai
@@ -18,6 +19,9 @@ OPENAI_TIMEOUT_SECONDS = 300
 # Read once at startup: the apps read tool descriptions when they start the server,
 # so changing the mode takes effect after the app restarts.
 EXPLICIT = settings.trigger_mode() == "explicit"
+if _settings_problem := settings.settings_problem():
+    # stderr lands in the app's MCP server log; stdout belongs to the protocol.
+    print(f"openai-images: {_settings_problem}", file=sys.stderr)
 
 EXPLICIT_RULE = (
     "Explicit mode is on. Use generate_image or edit_image only when the user explicitly asks for "

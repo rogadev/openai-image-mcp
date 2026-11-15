@@ -82,6 +82,9 @@ def check(out: Printer = print) -> int:
     folder, folder_source = images.configured_output_dir()
     out(f"Images folder: {folder} (from {folder_source}).")
     out(f"Trigger mode: {settings.trigger_mode()}.")
+    if problem := settings.settings_problem():
+        out(f"Warning: {problem}")
+        status = 1
     registered = apps.claude_code_registered()
     out(
         "Claude Code: "

@@ -27,6 +27,20 @@ def read_settings() -> dict[str, Any]:
     return data if isinstance(data, dict) else {}
 
 
+def settings_problem() -> str | None:
+    """Says why the settings file can't be used, if it exists but is damaged."""
+    path = settings_path()
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return None
+    except (OSError, json.JSONDecodeError) as err:
+        return f"{path} can't be read ({err}); using defaults until it's fixed or deleted."
+    if not isinstance(data, dict):
+        return f"{path} isn't a settings object; using defaults until it's fixed or deleted."
+    return None
+
+
 def _write(settings: dict[str, Any]) -> None:
     path = settings_path()
     path.parent.mkdir(parents=True, exist_ok=True)

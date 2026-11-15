@@ -290,3 +290,17 @@ def test_trigger_command_shows_sets_and_validates():
     assert settings.trigger_mode() == "explicit"
     admin.set_trigger(None, output.append)
     assert output[-1].startswith("Trigger mode: explicit.")
+
+
+def test_check_warns_about_a_damaged_settings_file(monkeypatch):
+    from openai_image_mcp import settings
+
+    path = settings.settings_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("{not json", encoding="utf-8")
+    monkeypatch.setattr(apps, "claude_code_registered", lambda: None)
+    monkeypatch.setattr(apps, "desktop_config_paths", lambda: [])
+    output = []
+    assert admin.check(output.append) == 1
+    assert any(line.startswith("Warning:") and "can't be read" in line for line in output)
+    assert settings.trigger_mode() == "implicit"
