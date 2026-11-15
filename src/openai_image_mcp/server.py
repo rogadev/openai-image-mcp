@@ -21,7 +21,14 @@ server = MCPServer(
         "Generates and edits images with OpenAI's Image API. Every image is saved to the "
         "user's image folder at full resolution; the chat receives a smaller preview plus the "
         "saved path. Use quality 'low' for quick drafts. Each call costs the user money, so "
-        "don't generate more images than asked for. By default the newest image model is used; "
+        "don't generate more images than asked for.\n\n"
+        "Revisions: when the user asks to change an image already made or shared in this "
+        "conversation (\"make the cat black\", \"now add sunglasses\"), call edit_image with the "
+        "saved path of the most recent version and a prompt that states only the change plus what "
+        "must stay the same. Don't call generate_image again, which draws a new, different image. "
+        "Each revision is saved as a new numbered version (-v2, -v3, ...); to undo, edit an earlier "
+        "version's path. Use generate_image only for a new image or when the user asks to start over.\n\n"
+        "By default the newest image model is used; "
         "list_image_models shows what the user's key can use. To change their saved default, the "
         "user runs `uv run manage.py model <id>` themselves."
     ),
@@ -92,7 +99,10 @@ def generate_image(
     model: str | None = None,
     open_after: bool = False,
 ) -> list[str | Image]:
-    """Generates images from a text prompt and saves them to the user's image folder.
+    """Generates new images from a text prompt and saves them to the user's image folder.
+
+    For changes to an image that already exists, use edit_image on its saved path instead;
+    generating again produces a different image rather than a revision.
 
     Args:
         prompt: What to draw. Be specific about subject, style, composition, and any text to render.
@@ -138,12 +148,20 @@ def edit_image(
     n: int = 1,
     model: str | None = None,
     open_after: bool = False,
+    input_fidelity: images.InputFidelity = "auto",
 ) -> list[str | Image]:
-    """Edits existing local images, or combines them as references, and saves the result.
+    """Revises an existing image, or combines several as references, and saves the result.
+
+    This is the tool for follow-up changes ("make it black", "add sunglasses", "remove the
+    background"): pass the saved path of the latest version from the previous result. The
+    result is saved as the next numbered version, so earlier versions stay available.
 
     Args:
-        prompt: The change to make, or the new image to build from the references.
-        image_paths: Full paths to one or more local PNG, JPEG, or WebP files.
+        prompt: The change to make, and what must stay the same, for example "Make the cat's
+            fur black. Keep the pose, background, and lighting unchanged." For several
+            references, describe the new image to build from them.
+        image_paths: Full paths to one or more local PNG, JPEG, or WebP files. For a revision,
+            the single most recent version.
         mask_path: Optional PNG whose transparent areas mark where to edit the first image.
         size: "auto" or WIDTHxHEIGHT, with the same rules as generate_image.
         quality: "low" for fast drafts up to "max".
@@ -154,6 +172,8 @@ def edit_image(
         open_after: Open each saved image in the user's default image viewer. Set it when the
             user asks to see or open the result, which helps most in Claude Code, where the chat
             is a terminal that can't display images.
+        input_fidelity: Leave as "auto". GPT Image 2 and later always preserve input detail and
+            reject this option; "high" helps only older models keep faces and fine detail.
     """
     return _run_image_call(
         lambda client, chosen: images.edit(
@@ -169,6 +189,7 @@ def edit_image(
             model=chosen,
             folder=images.output_dir(),
             now=datetime.now(),
+            input_fidelity=input_fidelity,
         ),
         model,
         open_after,

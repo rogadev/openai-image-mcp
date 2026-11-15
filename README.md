@@ -23,7 +23,7 @@ If you've been looking for a way to make AI images in Claude, use ChatGPT's imag
 Once it's set up, you talk to Claude normally. Claude decides when to use the image tool, and asks your permission before each call.
 
 - **Create images from a description.** "Make a landscape banner of a lighthouse at dusk, flat illustration style."
-- **Iterate in conversation.** "Nice. Now make the sky more orange and add a sailboat." Claude sees each result, so it can refine the prompt for you.
+- **Revise in conversation.** "Make the cat black." "Now add sunglasses." Each change edits the previous version instead of drawing a new picture, so the subject, scene, and style stay the same, and every version is kept.
 - **Edit your own images.** "Take `C:\Users\me\Pictures\room.jpg` and repaint the walls sage green."
 - **Combine images.** "Use these three product photos as references and make a single gift-basket shot."
 - **Get transparent PNGs** for logos, icons, and stickers.
@@ -170,6 +170,26 @@ Prompting tips:
 - **For edits, give the full file path** and say exactly what should change and what should stay the same.
 - **Iterate.** Claude sees each result, so "warmer colors" or "zoom out a bit" works well.
 
+### Revising an image
+
+Ask for changes the way you'd ask a designer: "make the cat black", then "now add sunglasses", then "make the background blue". For each change, Claude edits the most recent version of the image instead of generating a new one. The cat stays the same cat, on the same sofa, in the same light, and only the thing you asked for changes.
+
+Every revision is saved as a new numbered file next to the original, so nothing is overwritten:
+
+```text
+2026-11-15_134456_a-cat-sitting-on-a-sofa.png      the original
+2026-11-15_134516_a-cat-sitting-on-a-sofa-v2.png   "make the cat black"
+2026-11-15_134533_a-cat-sitting-on-a-sofa-v3.png   "now add sunglasses"
+```
+
+That gives you an undo: "go back to the black cat without sunglasses and make it smile instead" edits v2 and saves v4. Revisions work across conversations too, because they start from the saved file: point Claude at any image in the folder, or any PNG, JPEG, or WebP of your own, and ask for a change. Say "start over" or "make a new one" when you want a fresh image instead.
+
+Tips for clean revisions:
+
+- **Change one or two things at a time.** Small steps keep everything else stable.
+- **Say what should stay the same** if something drifts: "keep the pose and the background".
+- **Current models keep full detail automatically.** GPT Image 2 and later always preserve the input image's detail. If you pin an older model, the `input_fidelity` option can help it hold onto faces and fine detail.
+
 ### Viewing your images
 
 - **Claude Desktop** shows the image right in the conversation, inside the tool's result.
@@ -266,7 +286,7 @@ claude mcp add --scope user --transport stdio --env IMAGE_OUTPUT_DIR=D:\Art\AI o
 }
 ```
 
-Files are named `<date>_<time>_<first words of the prompt>.<format>`, for example `2026-11-15_143205_a-red-fox-in-watercolor.png`. Existing files are never overwritten.
+Files are named `<date>_<time>_<first words of the prompt>.<format>`, for example `2026-11-15_143205_a-red-fox-in-watercolor.png`. A revision keeps the original's name and adds a version number (`-v2`, `-v3`, and so on); an edit of an image from elsewhere ends in `-edit`. Existing files are never overwritten.
 
 ## Uninstalling
 
@@ -347,12 +367,15 @@ Creates images from a text prompt.
 
 #### `edit_image`
 
-Edits local images, or combines several as references. Takes the same options as `generate_image`, plus:
+Revises an existing image, or combines several as references. Claude uses it for follow-up changes to an image it already made. Takes the same options as `generate_image`, plus:
 
 | Parameter | Type | Notes |
 |---|---|---|
 | `image_paths` | list of strings | Full paths to one or more local PNG, JPEG, or WebP files, each up to 50 MB. |
 | `mask_path` | string, optional | A PNG the same size as the first image. Its transparent areas mark where to edit. |
+| `input_fidelity` | string, optional | `"auto"` (default), `"low"`, or `"high"`. Sent only if not `"auto"`. Only older models accept it; GPT Image 2 and later always preserve input detail and reject it. |
+
+With one image, the result is saved as the next version of that image (`-v2`, `-v3`, and so on). With several, it's named from the prompt.
 
 Because this tool uploads files to OpenAI, it checks every file before sending it: the extension must be `.png`, `.jpg`, `.jpeg`, or `.webp`, the file must actually open as that kind of image, and it must be 50 MB or less. Anything else (a document, a key file, a renamed file) is refused and never leaves your computer.
 

@@ -218,3 +218,50 @@ def test_request_options_send_only_what_differs_from_defaults():
 
 def test_dall_e_models_ask_for_base64():
     assert images.request_options("dall-e-3", "auto", "auto", "auto", "png", 1)["response_format"] == "b64_json"
+
+
+@pytest.mark.parametrize(
+    ("source", "label"),
+    [
+        ("2026-11-15_143205_a-cat-on-a-sofa.png", "a-cat-on-a-sofa-v2"),
+        ("2026-11-15_143300_a-cat-on-a-sofa-v2.png", "a-cat-on-a-sofa-v3"),
+        ("2026-11-15_143400_a-cat-on-a-sofa-v9.jpg", "a-cat-on-a-sofa-v10"),
+        ("2026-11-15_143205_logo-1024.png", "logo-1024-v2"),
+        ("My Living Room.JPG", "my-living-room-edit"),
+    ],
+)
+def test_revision_label_numbers_versions(source, label):
+    assert images.revision_label(source) == label
+
+
+def test_revision_chain_names_each_version_after_the_original(tmp_path):
+    first = call_generate(FakeClient(), tmp_path)[0].path
+    assert first.name == "2026-11-15_143205_a-red-fox-watercolor.png"
+
+    second = call_edit(tmp_path, [first])[0].path
+    third = call_edit(tmp_path, [second])[0].path
+    assert second.name == "2026-11-15_143205_a-red-fox-watercolor-v2.png"
+    assert third.name == "2026-11-15_143205_a-red-fox-watercolor-v3.png"
+    assert first.exists() and second.exists(), "earlier versions are kept for undo"
+
+
+def test_combining_several_images_is_named_from_the_prompt(tmp_path):
+    a, b = tmp_path / "a.png", tmp_path / "b.png"
+    a.write_bytes(png_bytes())
+    b.write_bytes(png_bytes())
+    saved = call_edit(tmp_path, [a, b])
+    assert saved[0].path.name == "2026-11-15_143205_make-it-blue.png"
+
+
+def test_input_fidelity_is_sent_only_when_asked_for(tmp_path):
+    source = tmp_path / "in.png"
+    source.write_bytes(png_bytes())
+    client = FakeClient()
+    call_edit(tmp_path, [source], client=client)
+    assert "input_fidelity" not in client.images.calls[0][1]
+
+    images.edit(
+        client, "x", [str(source)], mask_path=None, size="auto", quality="low", background="auto",
+        output_format="png", n=1, model="gpt-image-1.5", folder=tmp_path / "out", now=NOW, input_fidelity="high",
+    )
+    assert client.images.calls[1][1]["input_fidelity"] == "high"

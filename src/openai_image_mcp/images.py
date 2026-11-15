@@ -25,6 +25,7 @@ PREVIEW_JPEG_QUALITY = 80
 
 Quality = Literal["auto", "low", "medium", "high", "xhigh", "max"]
 Background = Literal["auto", "transparent", "opaque"]
+InputFidelity = Literal["auto", "low", "high"]
 OutputFormat = Literal["png", "jpeg", "webp"]
 
 MAX_IMAGES_PER_CALL = 4
@@ -148,9 +149,27 @@ def slugify(prompt: str, max_words: int = 6) -> str:
     return "-".join(words) or "image"
 
 
-def unique_paths(folder: Path, prompt: str, extension: str, count: int, now: datetime) -> list[Path]:
-    """Builds `<date>_<time>_<slug>[-k].<ext>` paths that don't overwrite existing files."""
-    stem = f"{now:%Y-%m-%d_%H%M%S}_{slugify(prompt)}"
+_SAVED_NAME = re.compile(r"^\d{4}-\d{2}-\d{2}_\d{6}_(?P<base>.+?)(?:-v(?P<version>\d+))?$")
+
+
+def revision_label(source_name: str) -> str:
+    """Names an edit after the image it revises, numbering versions.
+
+    An image this server saved as `<date>_<time>_a-cat.png` is version 1, so its
+    edit becomes `a-cat-v2`, the edit of that becomes `a-cat-v3`, and so on. An
+    image from anywhere else becomes `<its name>-edit`.
+    """
+    stem = Path(source_name).stem
+    match = _SAVED_NAME.match(stem)
+    if match:
+        version = int(match["version"] or 1)
+        return f"{match['base']}-v{version + 1}"
+    return f"{slugify(stem)}-edit"
+
+
+def unique_paths(folder: Path, label: str, extension: str, count: int, now: datetime) -> list[Path]:
+    """Builds `<date>_<time>_<label>[-k].<ext>` paths that don't overwrite existing files."""
+    stem = f"{now:%Y-%m-%d_%H%M%S}_{label}"
     paths: list[Path] = []
     suffix = 0
     while len(paths) < count:
@@ -192,7 +211,7 @@ def make_preview(image_bytes: bytes) -> bytes:
         return out.getvalue()
 
 
-def save_results(response: Any, prompt: str, output_format: str, folder: Path, now: datetime) -> list[SavedImage]:
+def save_results(response: Any, label: str, output_format: str, folder: Path, now: datetime) -> list[SavedImage]:
     """Writes each base64 image in an Images API response to disk."""
     payloads = [item.b64_json for item in (response.data or []) if getattr(item, "b64_json", None)]
     if not payloads:
@@ -200,7 +219,7 @@ def save_results(response: Any, prompt: str, output_format: str, folder: Path, n
     folder.mkdir(parents=True, exist_ok=True)
     extension = "jpg" if output_format == "jpeg" else output_format
     saved = []
-    for path, payload in zip(unique_paths(folder, prompt, extension, len(payloads), now), payloads):
+    for path, payload in zip(unique_paths(folder, label, extension, len(payloads), now), payloads):
         image_bytes = base64.b64decode(payload)
         path.write_bytes(image_bytes)
         saved.append(SavedImage(path=path, preview_jpeg=make_preview(image_bytes)))
@@ -225,7 +244,7 @@ def generate(
     response = client.images.generate(
         prompt=prompt, **request_options(model, size, quality, background, output_format, n)
     )
-    return save_results(response, prompt, output_format, folder, now)
+    return save_results(response, slugify(prompt), output_format, folder, now)
 
 
 def edit(
@@ -242,6 +261,7 @@ def edit(
     model: str,
     folder: Path,
     now: datetime,
+    input_fidelity: str = "auto",
 ) -> list[SavedImage]:
     validate_size(size)
     validate_options(n, background, output_format)
@@ -256,5 +276,11 @@ def edit(
     }
     if mask:
         kwargs["mask"] = mask
+    # GPT Image 2 and later always keep full detail from input images and reject this
+    # option, so it's sent only when asked for, for older models that support it.
+    if input_fidelity != "auto":
+        kwargs["input_fidelity"] = input_fidelity
     response = client.images.edit(**kwargs)
-    return save_results(response, prompt, output_format, folder, now)
+    # One source image is a revision, named after it; several are a new composition.
+    label = revision_label(Path(image_paths[0]).name) if len(image_paths) == 1 else slugify(prompt)
+    return save_results(response, label, output_format, folder, now)
