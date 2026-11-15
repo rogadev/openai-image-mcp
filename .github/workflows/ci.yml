@@ -1,0 +1,52 @@
+name: CI
+
+# Runs on every pull request into dev or main and every push to dev. The
+# "test" job is the check branch protection should require before a merge.
+on:
+  pull_request:
+    branches: [dev, main]
+  push:
+    branches: [dev]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  source-branch:
+    name: source branch
+    runs-on: ubuntu-latest
+    steps:
+      - name: Only dev merges into main
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.base_ref }}
+          HEAD: ${{ github.head_ref }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          REPO: ${{ github.repository }}
+        run: |
+          if [ "$EVENT" != pull_request ] || [ "$BASE" != main ]; then
+            echo "Not a pull request into main; nothing to check."
+            exit 0
+          fi
+          if [ "$HEAD_REPO" != "$REPO" ] || [ "$HEAD" != dev ]; then
+            echo "::error::Pull requests into main must come from this repository's dev branch (this one is from $HEAD_REPO:$HEAD)."
+            exit 1
+          fi
+          echo "Pull request is from dev."
+
+  test:
+    name: test
+    # The server targets Windows (Credential Manager, Claude Desktop), so test there.
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+      - name: Install locked dependencies
+        run: uv sync --locked
+      - name: Run the tests
+        run: uv run pytest

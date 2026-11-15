@@ -1,0 +1,113 @@
+name: Release
+
+# Publishes a GitHub release, tagged vX.Y.Z, each time a pull request merges
+# into dev or main with commits that haven't been released yet. Direct pushes
+# don't release, and a dev-to-main merge of work already released from dev
+# publishes nothing. .github/scripts/release_version.py
+# picks the version from the commits since the last tag: a feat: commit bumps
+# minor, anything else bumps patch, and the first release is pyproject.toml's
+# version (0.1.0). Major happens only when the merged pull request has the
+# release:major label. The tag is the version of record; nothing is committed
+# back to the branch. To retry a failed release, re-run the failed workflow run.
+#
+# Two jobs keep the write token away from project code: "prepare" runs the
+# tests and works out the version and notes with read-only access, and
+# "publish" creates the release without checking out or running anything.
+on:
+  pull_request:
+    types: [closed]
+    branches: [dev, main]
+
+permissions: {}
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    # Merged (not just closed) pull requests from this repository only.
+    if: >-
+      github.event.pull_request.merged == true &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.merge_commit_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+
+      # Re-run the checks on the exact commit being released.
+      - name: Run the tests
+        run: |
+          uv sync --locked
+          uv run pytest
+
+      - name: Work out the version and notes
+        id: version
+        shell: bash
+        env:
+          MAJOR: ${{ contains(github.event.pull_request.labels.*.name, 'release:major') }}
+        run: |
+          set -euo pipefail
+          args=(next)
+          if [ "$MAJOR" = true ]; then
+            echo "The pull request has release:major; bumping the major version."
+            args+=(--major)
+          fi
+          version=$(uv run --no-project python .github/scripts/release_version.py "${args[@]}")
+          if [ -z "$version" ]; then
+            echo "This commit is already released; nothing to do."
+            exit 0
+          fi
+          if ! [[ $version =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Expected an X.Y.Z version, got: $version"
+            exit 1
+          fi
+          echo "Next version: $version"
+          echo "tag=v$version" >> "$GITHUB_OUTPUT"
+          uv run --no-project python .github/scripts/release_version.py notes "v$version" --repo "$GITHUB_REPOSITORY" > notes.md
+
+      - name: Hand the notes to the publish job
+        if: steps.version.outputs.tag != ''
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-notes
+          path: notes.md
+          retention-days: 1
+
+  publish:
+    needs: prepare
+    if: needs.prepare.outputs.tag != ''
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # tags and releases
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-notes
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+          MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha }}
+        run: |
+          set -euo pipefail
+          if ! [[ $TAG =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Refusing to publish an unexpected tag: $TAG"
+            exit 1
+          fi
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            echo "$TAG is already released."
+            exit 0
+          fi
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --target "$MERGE_SHA" --title "$TAG" --notes-file notes.md
+          echo "Published $TAG."

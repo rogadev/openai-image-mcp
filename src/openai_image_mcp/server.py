@@ -3,17 +3,34 @@
 Runs over stdio: each Claude app starts it on demand and stops it on exit.
 """
 
+import sys
 from datetime import datetime
 
 import openai
 from mcp.server.mcpserver import Image, MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 
-from openai_image_mcp import images
-from openai_image_mcp.key import MissingKeyError, load_api_key
+from openai_image_mcp import images, models, settings
+from openai_image_mcp.key import SETUP_HINT, MissingKeyError, load_api_key, make_client
 
 # Generation can take up to about two minutes for complex prompts.
 OPENAI_TIMEOUT_SECONDS = 300
+
+# Read once at startup: the apps read tool descriptions when they start the server,
+# so changing the mode takes effect after the app restarts.
+EXPLICIT = settings.trigger_mode() == "explicit"
+if _settings_problem := settings.settings_problem():
+    # stderr lands in the app's MCP server log; stdout belongs to the protocol.
+    print(f"openai-images: {_settings_problem}", file=sys.stderr)
+
+EXPLICIT_RULE = (
+    "Explicit mode is on. Use generate_image or edit_image only when the user explicitly asks for "
+    "an image from OpenAI (for example \"OpenAI\", \"GPT Image\", \"ChatGPT image\", \"DALL-E\") or "
+    "names this tool. For any other visual, such as a diagram, chart, SVG, icon, artifact, or README "
+    "graphic, use your own built-in abilities and don't call these tools. Revising an image these tools "
+    "already made in this conversation counts as explicit. If you're unsure, ask the user whether they "
+    "want an OpenAI image."
+)
 
 server = MCPServer(
     name="openai-images",
@@ -21,9 +38,30 @@ server = MCPServer(
         "Generates and edits images with OpenAI's Image API. Every image is saved to the "
         "user's image folder at full resolution; the chat receives a smaller preview plus the "
         "saved path. Use quality 'low' for quick drafts. Each call costs the user money, so "
-        "don't generate more images than asked for."
+        "don't generate more images than asked for.\n\n"
+        "Revisions: when the user asks to change an image already made or shared in this "
+        "conversation (\"make the cat black\", \"now add sunglasses\"), call edit_image with the "
+        "saved path of the most recent version and a prompt that states only the change plus what "
+        "must stay the same. Don't call generate_image again, which draws a new, different image. "
+        "Each revision is saved as a new numbered version (-v2, -v3, ...); to undo, edit an earlier "
+        "version's path. Use generate_image only for a new image or when the user asks to start over.\n\n"
+        "By default the newest image model is used; "
+        "list_image_models shows what the user's key can use. To change their saved default, the "
+        "user runs `uv run manage.py model <id>` themselves."
+        + ("\n\n" + EXPLICIT_RULE if EXPLICIT else "")
     ),
 )
+
+
+def _image_tool(fn):
+    """Registers an image tool, putting the explicit-mode rule first in its description."""
+    description = fn.__doc__ or ""
+    if EXPLICIT:
+        description = f"{EXPLICIT_RULE}\n\n{description}"
+    return server.tool(structured_output=False, description=description)(fn)
+
+
+resolver = models.ModelResolver()
 
 
 def _client() -> openai.OpenAI:
@@ -31,33 +69,53 @@ def _client() -> openai.OpenAI:
         key = load_api_key()
     except MissingKeyError as err:
         raise ToolError(str(err)) from err
-    return openai.OpenAI(api_key=key, timeout=OPENAI_TIMEOUT_SECONDS, max_retries=1)
+    return make_client(key, timeout=OPENAI_TIMEOUT_SECONDS)
 
 
-def _to_content(saved: list[images.SavedImage], model: str) -> list[str | Image]:
+def _to_content(saved: list[images.SavedImage], model: str, opened: bool) -> list[str | Image]:
     lines = [f"Saved {len(saved)} image(s) with {model}:"]
-    lines += [f"- {item.path}" for item in saved]
-    lines.append("The previews below are downscaled; the files above are full resolution.")
+    for item in saved:
+        lines.append(f"- {item.path}")
+        lines.append(f"  Open: {item.path.as_uri()}")
+    lines.append(f"Folder: {saved[0].path.parent.as_uri()}")
+    if opened:
+        lines.append("Opened in the user's default image viewer.")
+    lines.append(
+        "The previews below are downscaled; the files above are full resolution. When you reply, "
+        "include each Open link as-is so the user can click it (a terminal can't show the image)."
+    )
     content: list[str | Image] = ["\n".join(lines)]
     content += [Image(data=item.preview_jpeg, format="jpeg") for item in saved]
     return content
 
 
-def _run(call, model: str) -> list[str | Image]:
+def _openai_errors(err: Exception) -> ToolError:
+    if isinstance(err, openai.AuthenticationError):
+        return ToolError(
+            "OpenAI rejected the stored API key. It may have expired or been revoked. "
+            f"To replace it, {SETUP_HINT}; the new key works on the next request, with no restart."
+        )
+    if isinstance(err, openai.NotFoundError):
+        return ToolError(f"OpenAI doesn't know that model, or this key can't use it: {err}")
+    return ToolError(f"OpenAI returned an error: {err}")
+
+
+def _run_image_call(call, requested_model: str | None, open_after: bool) -> list[str | Image]:
+    client = _client()
+    model = resolver.resolve(client, requested_model)
     try:
-        return _to_content(call(), model)
+        saved = call(client, model)
+        if open_after:
+            for item in saved:
+                images.open_in_viewer(item.path)
+        return _to_content(saved, model, open_after)
     except images.ImageRequestError as err:
         raise ToolError(str(err)) from err
-    except openai.AuthenticationError as err:
-        raise ToolError(
-            "OpenAI rejected the API key. Store a valid key with `uv run store_key.py` in the "
-            "openai-image-mcp folder, then restart the app."
-        ) from err
     except openai.APIError as err:
-        raise ToolError(f"OpenAI returned an error: {err}") from err
+        raise _openai_errors(err) from err
 
 
-@server.tool(structured_output=False)
+@_image_tool
 def generate_image(
     prompt: str,
     size: str = "auto",
@@ -66,8 +124,12 @@ def generate_image(
     output_format: images.OutputFormat = "png",
     n: int = 1,
     model: str | None = None,
+    open_after: bool = False,
 ) -> list[str | Image]:
-    """Generates images from a text prompt and saves them to the user's image folder.
+    """Generates new images from a text prompt and saves them to the user's image folder.
+
+    For changes to an image that already exists, use edit_image on its saved path instead;
+    generating again produces a different image rather than a revision.
 
     Args:
         prompt: What to draw. Be specific about subject, style, composition, and any text to render.
@@ -77,12 +139,15 @@ def generate_image(
         background: "transparent" needs output_format "png" or "webp".
         output_format: File format of the saved image.
         n: Number of images, 1 to 4. Each one is billed.
-        model: Override the model, for example "gpt-image-2.6-sunburst" for detailed work.
+        model: A model ID for this request only. Leave empty to use the user's default
+            (the newest model unless they pinned one). See list_image_models.
+        open_after: Open each saved image in the user's default image viewer. Set it when the
+            user asks to see or open the result, which helps most in Claude Code, where the chat
+            is a terminal that can't display images.
     """
-    chosen = model or images.default_model()
-    return _run(
-        lambda: images.generate(
-            _client(),
+    return _run_image_call(
+        lambda client, chosen: images.generate(
+            client,
             prompt,
             size=size,
             quality=quality,
@@ -93,11 +158,12 @@ def generate_image(
             folder=images.output_dir(),
             now=datetime.now(),
         ),
-        chosen,
+        model,
+        open_after,
     )
 
 
-@server.tool(structured_output=False)
+@_image_tool
 def edit_image(
     prompt: str,
     image_paths: list[str],
@@ -108,24 +174,37 @@ def edit_image(
     output_format: images.OutputFormat = "png",
     n: int = 1,
     model: str | None = None,
+    open_after: bool = False,
+    input_fidelity: images.InputFidelity = "auto",
 ) -> list[str | Image]:
-    """Edits existing local images, or combines them as references, and saves the result.
+    """Revises an existing image, or combines several as references, and saves the result.
+
+    This is the tool for follow-up changes ("make it black", "add sunglasses", "remove the
+    background"): pass the saved path of the latest version from the previous result. The
+    result is saved as the next numbered version, so earlier versions stay available.
 
     Args:
-        prompt: The change to make, or the new image to build from the references.
-        image_paths: Full paths to one or more local PNG, JPEG, or WebP files.
+        prompt: The change to make, and what must stay the same, for example "Make the cat's
+            fur black. Keep the pose, background, and lighting unchanged." For several
+            references, describe the new image to build from them.
+        image_paths: Full paths to one or more local PNG, JPEG, or WebP files. For a revision,
+            the single most recent version.
         mask_path: Optional PNG whose transparent areas mark where to edit the first image.
         size: "auto" or WIDTHxHEIGHT, with the same rules as generate_image.
         quality: "low" for fast drafts up to "max".
         background: "transparent" needs output_format "png" or "webp".
         output_format: File format of the saved image.
         n: Number of results, 1 to 4. Each one is billed.
-        model: Override the model; "gpt-image-2.6-sunburst" is tuned for precise edits.
+        model: A model ID for this request only. Leave empty to use the user's default.
+        open_after: Open each saved image in the user's default image viewer. Set it when the
+            user asks to see or open the result, which helps most in Claude Code, where the chat
+            is a terminal that can't display images.
+        input_fidelity: Leave as "auto". GPT Image 2 and later always preserve input detail and
+            reject this option; "high" helps only older models keep faces and fine detail.
     """
-    chosen = model or images.default_model()
-    return _run(
-        lambda: images.edit(
-            _client(),
+    return _run_image_call(
+        lambda client, chosen: images.edit(
+            client,
             prompt,
             image_paths,
             mask_path=mask_path,
@@ -137,9 +216,56 @@ def edit_image(
             model=chosen,
             folder=images.output_dir(),
             now=datetime.now(),
+            input_fidelity=input_fidelity,
         ),
-        chosen,
+        model,
+        open_after,
     )
+
+
+def _model_overview(client: openai.OpenAI, query: str | None) -> str:
+    try:
+        available = resolver.available(client, refresh=True)
+    except openai.APIError as err:
+        raise _openai_errors(err) from err
+    setting, source = models.configured_default()
+    latest = models.pick_latest(available)
+    in_use = latest if setting == models.LATEST else setting
+    matches = models.search(available, query)
+
+    lines = [
+        f"Default setting: {setting} (from {source}).",
+        f"Model used when none is given: {in_use or models.FALLBACK_MODEL}.",
+        f"Newest available: {latest or 'none found'}.",
+        "",
+        f"Image models this key can use{f' matching {query!r}' if query else ''}, newest first:",
+    ]
+    if not matches:
+        lines.append("- none")
+    for model in matches:
+        tags = []
+        if model.id == latest:
+            tags.append("newest")
+        if model.id == in_use:
+            tags.append("current default")
+        if model.is_snapshot:
+            tags.append("fixed snapshot")
+        lines.append(f"- {model.id}" + (f" ({', '.join(tags)})" if tags else ""))
+    lines.append("")
+    lines.append("Prices differ by model; see https://openai.com/api/pricing/ for current rates.")
+    return "\n".join(lines)
+
+
+@server.tool()
+def list_image_models(query: str | None = None) -> str:
+    """Lists the OpenAI image models the user's API key can use, newest first.
+
+    Shows which model is used by default and whether the user pinned one.
+
+    Args:
+        query: Optional words to filter by, such as "2.5" or "flare".
+    """
+    return _model_overview(_client(), query)
 
 
 def main() -> None:

@@ -1,7 +1,6 @@
 import base64
 import io
 from datetime import datetime
-from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -24,17 +23,16 @@ def fake_response(count=1, data=None):
 
 
 class FakeImages:
-    def __init__(self, count=1):
-        self.count = count
+    def __init__(self):
         self.calls = []
 
     def generate(self, **kwargs):
         self.calls.append(("generate", kwargs))
-        return fake_response(kwargs["n"])
+        return fake_response(kwargs.get("n", 1))
 
     def edit(self, **kwargs):
         self.calls.append(("edit", kwargs))
-        return fake_response(kwargs["n"])
+        return fake_response(kwargs.get("n", 1))
 
 
 class FakeClient:
@@ -96,7 +94,7 @@ def test_generate_saves_full_image_and_returns_small_preview(tmp_path):
         assert preview.format == "JPEG"
         assert max(preview.size) == images.PREVIEW_MAX_EDGE
     _, kwargs = client.images.calls[0]
-    assert kwargs["model"] == "m" and kwargs["quality"] == "low" and kwargs["n"] == 1
+    assert kwargs == {"prompt": "A red fox, watercolor!", "model": "m", "quality": "low"}
 
 
 def test_multiple_images_get_numbered_names(tmp_path):
@@ -127,38 +125,174 @@ def test_empty_response_is_an_error(tmp_path):
         images.save_results(SimpleNamespace(data=[]), "p", "png", tmp_path, NOW)
 
 
-def test_edit_sends_files_and_mask(tmp_path):
-    source = tmp_path / "in.png"
-    mask = tmp_path / "mask.png"
+def jpeg_bytes() -> bytes:
+    out = io.BytesIO()
+    PILImage.new("RGB", (64, 64), (10, 20, 30)).save(out, format="JPEG")
+    return out.getvalue()
+
+
+def call_edit(tmp_path, paths, mask_path=None, client=None):
+    return images.edit(
+        client or FakeClient(), "make it blue", [str(p) for p in paths], mask_path=mask_path and str(mask_path),
+        size="auto", quality="low", background="auto", output_format="png", n=1, model="m",
+        folder=tmp_path / "out", now=NOW,
+    )
+
+
+def test_edit_uploads_the_checked_bytes_with_the_right_type(tmp_path):
+    source, photo, mask = tmp_path / "in.png", tmp_path / "photo.JPG", tmp_path / "mask.png"
     source.write_bytes(png_bytes())
+    photo.write_bytes(jpeg_bytes())
     mask.write_bytes(png_bytes())
     client = FakeClient()
 
-    saved = images.edit(
-        client, "make it blue", [str(source)], mask_path=str(mask), size="auto", quality="low",
-        background="auto", output_format="png", n=1, model="m", folder=tmp_path / "out", now=NOW,
-    )
+    saved = call_edit(tmp_path, [source, photo], mask, client)
 
     assert saved[0].path.exists()
     _, kwargs = client.images.calls[0]
-    assert kwargs["image"].closed and kwargs["mask"].closed
-    assert Path(kwargs["image"].name) == source
+    assert kwargs["image"] == [("in.png", png_bytes(), "image/png"), ("photo.JPG", jpeg_bytes(), "image/jpeg")]
+    assert kwargs["mask"] == ("mask.png", png_bytes(), "image/png")
+
+
+@pytest.mark.parametrize(
+    ("name", "content", "reason"),
+    [
+        ("id_ed25519", b"-----BEGIN OPENSSH PRIVATE KEY-----", "allowed image type"),
+        ("notes.txt", b"hello", "allowed image type"),
+        ("secrets.png", b"sk-proj-not-really-an-image", "readable image"),
+        ("swapped.png", None, "allowed image type"),
+    ],
+)
+def test_edit_refuses_anything_that_isnt_an_allowed_image(tmp_path, name, content, reason):
+    path = tmp_path / name
+    path.write_bytes(jpeg_bytes() if content is None else content)
+    client = FakeClient()
+    with pytest.raises(images.ImageRequestError, match=reason):
+        call_edit(tmp_path, [path], client=client)
+    assert client.images.calls == [], "nothing may be uploaded"
+
+
+def test_edit_mask_must_be_png(tmp_path):
+    source, mask = tmp_path / "in.png", tmp_path / "mask.jpg"
+    source.write_bytes(png_bytes())
+    mask.write_bytes(jpeg_bytes())
+    with pytest.raises(images.ImageRequestError, match="allowed image type"):
+        call_edit(tmp_path, [source], mask)
+
+
+def test_edit_refuses_oversized_files(tmp_path, monkeypatch):
+    source = tmp_path / "in.png"
+    source.write_bytes(png_bytes())
+    monkeypatch.setattr(images, "MAX_SOURCE_BYTES", 10)
+    with pytest.raises(images.ImageRequestError, match="larger than"):
+        call_edit(tmp_path, [source])
 
 
 def test_edit_reports_missing_files(tmp_path):
-    with pytest.raises(images.ImageRequestError, match="don't exist"):
-        images.edit(
-            FakeClient(), "x", [str(tmp_path / "nope.png")], mask_path=None, size="auto", quality="low",
-            background="auto", output_format="png", n=1, model="m", folder=tmp_path, now=NOW,
-        )
+    with pytest.raises(images.ImageRequestError, match="isn't a file"):
+        call_edit(tmp_path, [tmp_path / "nope.png"])
+    with pytest.raises(images.ImageRequestError, match="isn't a file"):
+        call_edit(tmp_path, [tmp_path])
 
 
-def test_output_dir_and_model_follow_environment(monkeypatch, tmp_path):
+def test_output_dir_priority_env_then_saved_then_default(monkeypatch, tmp_path):
+    from openai_image_mcp import settings
+
     monkeypatch.delenv("IMAGE_OUTPUT_DIR", raising=False)
-    monkeypatch.delenv("IMAGE_MODEL", raising=False)
-    assert images.output_dir() == images.DEFAULT_OUTPUT_DIR
-    assert images.default_model() == images.DEFAULT_MODEL
-    monkeypatch.setenv("IMAGE_OUTPUT_DIR", str(tmp_path))
-    monkeypatch.setenv("IMAGE_MODEL", "gpt-image-2.6-sunburst")
-    assert images.output_dir() == tmp_path
-    assert images.default_model() == "gpt-image-2.6-sunburst"
+    assert images.configured_output_dir() == (images.default_output_dir(), "the built-in default")
+    assert images.default_output_dir().name == "Claude Images"
+
+    settings.save_setting("output_dir", str(tmp_path / "saved"))
+    assert images.configured_output_dir() == (tmp_path / "saved", "your saved setting")
+
+    monkeypatch.setenv("IMAGE_OUTPUT_DIR", str(tmp_path / "env"))
+    assert images.output_dir() == tmp_path / "env"
+
+
+def test_request_options_send_only_what_differs_from_defaults():
+    assert images.request_options("gpt-image-2.6-flare", "auto", "auto", "auto", "png", 1) == {
+        "model": "gpt-image-2.6-flare"
+    }
+    assert images.request_options("gpt-image-2.5-flare", "1536x1024", "high", "transparent", "webp", 2) == {
+        "model": "gpt-image-2.5-flare",
+        "size": "1536x1024",
+        "quality": "high",
+        "background": "transparent",
+        "output_format": "webp",
+        "n": 2,
+    }
+
+
+def test_dall_e_models_ask_for_base64():
+    assert images.request_options("dall-e-3", "auto", "auto", "auto", "png", 1)["response_format"] == "b64_json"
+
+
+@pytest.mark.parametrize(
+    ("source", "label"),
+    [
+        ("2026-11-15_143205_a-cat-on-a-sofa.png", "a-cat-on-a-sofa-v2"),
+        ("2026-11-15_143300_a-cat-on-a-sofa-v2.png", "a-cat-on-a-sofa-v3"),
+        ("2026-11-15_143400_a-cat-on-a-sofa-v9.jpg", "a-cat-on-a-sofa-v10"),
+        ("2026-11-15_143205_logo-1024.png", "logo-1024-v2"),
+        ("My Living Room.JPG", "my-living-room-edit"),
+    ],
+)
+def test_revision_label_numbers_versions(source, label):
+    assert images.revision_label(source) == label
+
+
+def test_revision_chain_names_each_version_after_the_original(tmp_path):
+    first = call_generate(FakeClient(), tmp_path)[0].path
+    assert first.name == "2026-11-15_143205_a-red-fox-watercolor.png"
+
+    second = call_edit(tmp_path, [first])[0].path
+    third = call_edit(tmp_path, [second])[0].path
+    assert second.name == "2026-11-15_143205_a-red-fox-watercolor-v2.png"
+    assert third.name == "2026-11-15_143205_a-red-fox-watercolor-v3.png"
+    assert first.exists() and second.exists(), "earlier versions are kept for undo"
+
+
+def test_combining_several_images_is_named_from_the_prompt(tmp_path):
+    a, b = tmp_path / "a.png", tmp_path / "b.png"
+    a.write_bytes(png_bytes())
+    b.write_bytes(png_bytes())
+    saved = call_edit(tmp_path, [a, b])
+    assert saved[0].path.name == "2026-11-15_143205_make-it-blue.png"
+
+
+def test_input_fidelity_is_sent_only_when_asked_for(tmp_path):
+    source = tmp_path / "in.png"
+    source.write_bytes(png_bytes())
+    client = FakeClient()
+    call_edit(tmp_path, [source], client=client)
+    assert "input_fidelity" not in client.images.calls[0][1]
+
+    images.edit(
+        client, "x", [str(source)], mask_path=None, size="auto", quality="low", background="auto",
+        output_format="png", n=1, model="gpt-image-1.5", folder=tmp_path / "out", now=NOW, input_fidelity="high",
+    )
+    assert client.images.calls[1][1]["input_fidelity"] == "high"
+
+
+@pytest.mark.parametrize(
+    ("source", "label"),
+    [
+        ("2026-11-15_143205_..png", "image-v2"),
+        ("2026-11-15_143205_Cat & Dog (Final!).png", "cat-dog-final-v2"),
+        ("2026-11-15_143205_" + "x" * 300 + ".png", "x" * 80 + "-v2"),
+        ("2026-11-15_143205_cat-v99999999999.png", "cat-v9999"),
+    ],
+)
+def test_revision_label_keeps_names_safe_and_short(source, label):
+    assert images.revision_label(source) == label
+
+
+@pytest.mark.parametrize("bad", ["relative/folder", 42, ["C:/x"]])
+def test_output_dir_ignores_a_saved_value_that_isnt_a_full_path(monkeypatch, bad):
+    from openai_image_mcp import settings
+
+    monkeypatch.delenv("IMAGE_OUTPUT_DIR", raising=False)
+    settings.save_setting("output_dir", bad)
+    folder, source = images.configured_output_dir()
+    assert folder == images.default_output_dir()
+    assert "isn't a full folder path" in source
