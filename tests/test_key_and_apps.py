@@ -41,17 +41,43 @@ def test_paste_summary_reports_length_and_prefix_only():
     assert "20 characters" in summary and "doesn't start with sk-" in summary and "abc" not in summary
 
 
+def test_describe_key_hides_the_ending_of_short_values():
+    assert key.describe_key("abcde") == "a 5-character value"
+    assert key.describe_key("abc_defg12345") == "a 13-character value"
+
+
+def test_set_key_asks_before_sending_a_non_sk_paste(monkeypatch):
+    code, out = run_set_key(
+        monkeypatch, "abc_defg1234567890xy", key.KeyCheck(True, "accepted", True), answer="n"
+    )
+    assert code == 1 and "Nothing was sent" in out
+    assert run_set_key.sent == [] and key.stored_key() is None
+
+
+def test_set_key_does_not_save_when_openai_cant_be_reached(monkeypatch):
+    code, out = run_set_key(monkeypatch, KEY_A, key.KeyCheck(False, "Couldn't reach OpenAI.", False))
+    assert code == 1 and "--no-check" in out and key.stored_key() is None
+
+
 def test_describe_key_never_shows_the_whole_key():
     text = key.describe_key(KEY_A)
     assert KEY_A not in text and text.endswith("...aaaa")
 
 
-def run_set_key(monkeypatch, secret, check_result=None):
-    output = []
+def run_set_key(monkeypatch, secret, check_result=None, answer="y"):
+    output, sent = [], []
+
+    def fake_check(k, m):
+        sent.append(k)
+        return check_result
+
     if check_result is not None:
-        monkeypatch.setattr(admin.key, "check_api_key", lambda k, m: check_result)
+        monkeypatch.setattr(admin.key, "check_api_key", fake_check)
         monkeypatch.setattr(admin, "_resolve_check_model", lambda k: "gpt-image-test")
-    code = admin.set_key(output.append, lambda prompt: secret, check=check_result is not None)
+    code = admin.set_key(
+        output.append, lambda prompt: secret, check=check_result is not None, confirm=lambda prompt: answer
+    )
+    run_set_key.sent = sent
     return code, "\n".join(output)
 
 
@@ -62,18 +88,18 @@ def test_set_key_rejects_an_empty_paste(monkeypatch):
 
 
 def test_set_key_lets_openai_judge_unusual_formats(monkeypatch):
-    code, out = run_set_key(monkeypatch, "abc_defg1234567890xy", key.KeyCheck(False, "OpenAI rejected this key."))
+    code, out = run_set_key(monkeypatch, "abc_defg1234567890xy", key.KeyCheck(False, "OpenAI rejected this key.", False))
     assert code == 1 and "20 characters" in out and "only once" in out
     assert "abc_defg" not in out and key.stored_key() is None
 
 
 def test_set_key_refuses_a_key_openai_rejects(monkeypatch):
-    code, out = run_set_key(monkeypatch, KEY_A, key.KeyCheck(False, "OpenAI rejected this key."))
+    code, out = run_set_key(monkeypatch, KEY_A, key.KeyCheck(False, "OpenAI rejected this key.", False))
     assert code == 1 and key.stored_key() is None
 
 
 def test_set_key_saves_and_then_replaces(monkeypatch):
-    good = key.KeyCheck(True, "OpenAI accepted the key.")
+    good = key.KeyCheck(True, "OpenAI accepted the key.", True)
     code, out = run_set_key(monkeypatch, KEY_A, good)
     assert code == 0 and "Saved a" in out and key.stored_key() == KEY_A
     code, out = run_set_key(monkeypatch, KEY_B, good)
@@ -82,7 +108,7 @@ def test_set_key_saves_and_then_replaces(monkeypatch):
 
 
 def test_set_key_keeps_a_key_that_works_but_lacks_model_access(monkeypatch):
-    check = key.KeyCheck(False, "The key works, but it can't use gpt-image-test.")
+    check = key.KeyCheck(False, "The key works, but it can't use gpt-image-test.", True)
     code, _ = run_set_key(monkeypatch, KEY_A, check)
     assert code == 0 and key.stored_key() == KEY_A
 

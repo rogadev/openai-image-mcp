@@ -23,7 +23,12 @@ def _resolve_check_model(api_key: str) -> str:
         return models.FALLBACK_MODEL
 
 
-def set_key(out: Printer = print, read_secret: Callable[[str], str] = getpass.getpass, check: bool = True) -> int:
+def set_key(
+    out: Printer = print,
+    read_secret: Callable[[str], str] = getpass.getpass,
+    check: bool = True,
+    confirm: Callable[[str], str] = input,
+) -> int:
     out("Paste your OpenAI API key and press Enter. It stays hidden while you type or paste.")
     new_key = read_secret("OpenAI API key: ").strip()
     if problem := key.key_problem(new_key):
@@ -31,14 +36,24 @@ def set_key(out: Printer = print, read_secret: Callable[[str], str] = getpass.ge
         return 1
     out(key.paste_summary(new_key))
     if check:
+        # Checking sends the pasted text to OpenAI. If it doesn't look like an OpenAI key,
+        # it may be some other secret pasted by mistake, so ask before it leaves the machine.
+        if not new_key.startswith("sk-"):
+            answer = confirm("Send it to OpenAI to check anyway? [y/N] ").strip().lower()
+            if answer not in ("y", "yes"):
+                out("Nothing was sent or saved.")
+                return 1
         result = key.check_api_key(new_key, _resolve_check_model(new_key))
         out(result.message)
-        if not result.ok and "rejected" in result.message:
-            out(
-                "Nothing was saved. OpenAI shows a full key only once, when it's created; copy it from "
-                "that pop-up at https://platform.openai.com/api-keys (the key list shows only names and "
-                "masked keys)."
-            )
+        if not result.key_valid:
+            out("Nothing was saved.")
+            if "rejected" in result.message:
+                out(
+                    "OpenAI shows a full key only once, when it's created; copy it from that pop-up at "
+                    "https://platform.openai.com/api-keys (the key list shows only names and masked keys)."
+                )
+            else:
+                out("To save it without checking, run `uv run manage.py key --no-check`.")
             return 1
     replacing = key.stored_key() is not None
     key.save_api_key(new_key)

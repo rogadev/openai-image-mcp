@@ -96,14 +96,20 @@ def paste_summary(key: str) -> str:
 
 
 def describe_key(key: str) -> str:
-    """A safe way to refer to a key: its length and last four characters."""
+    """A safe way to refer to a key: its length, plus its last four characters when that
+    reveals only a small part of it."""
+    if len(key) < 20:
+        return f"a {len(key)}-character value"
     return f"a {len(key)}-character key ending in ...{key[-4:]}"
 
 
 @dataclass(frozen=True)
 class KeyCheck:
     ok: bool
+    """Ready for image requests."""
     message: str
+    key_valid: bool
+    """OpenAI confirmed the key itself is genuine, even if it can't use the model yet."""
 
 
 def check_api_key(key: str, model: str) -> KeyCheck:
@@ -112,7 +118,7 @@ def check_api_key(key: str, model: str) -> KeyCheck:
     try:
         client.models.retrieve(model)
     except openai.AuthenticationError:
-        return KeyCheck(False, "OpenAI rejected this key. It may be mistyped, revoked, or expired.")
+        return KeyCheck(False, "OpenAI rejected this key. It may be mistyped, revoked, or expired.", False)
     except openai.NotFoundError:
         return KeyCheck(
             False,
@@ -124,9 +130,10 @@ def check_api_key(key: str, model: str) -> KeyCheck:
             True,
             "OpenAI accepted the key, but it isn't allowed to read model details (a restricted key). "
             "Image requests may still work; if they don't, give the key access to images.",
+            True,
         )
     except openai.APIConnectionError:
-        return KeyCheck(False, "Couldn't reach OpenAI. Check your internet connection and try again.")
+        return KeyCheck(False, "Couldn't reach OpenAI. Check your internet connection and try again.", False)
     except openai.APIError as err:
-        return KeyCheck(False, f"OpenAI returned an unexpected error ({type(err).__name__}).")
-    return KeyCheck(True, f"OpenAI accepted the key, and it can use {model}.")
+        return KeyCheck(False, f"OpenAI returned an unexpected error ({type(err).__name__}).", False)
+    return KeyCheck(True, f"OpenAI accepted the key, and it can use {model}.", True)
