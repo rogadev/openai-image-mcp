@@ -416,10 +416,10 @@ npx @modelcontextprotocol/inspector .venv\Scripts\openai-image-mcp.exe
 
 ### Branches and releases
 
-Work happens on short-lived feature branches. Each one reaches `dev` through a pull request, merged with a merge commit once CI is green, and **every pull request merged into `dev` publishes a release**. `main` is optional; a pull request into it must come from `dev`.
+Work reaches `dev` through pull requests from short-lived feature branches (or direct pushes), and `dev` reaches `main` through a pull request. Merge with a merge commit once CI is green. **Every merged pull request that brings unreleased commits publishes a release**, whether it merges into `dev` or `main`. A `dev`-to-`main` merge of work already released from `dev` publishes nothing.
 
 - **CI** (`.github/workflows/ci.yml`) runs the tests on Windows for every pull request into `dev` or `main` and every push to `dev`, and fails a pull request into `main` that doesn't come from `dev`.
-- **Release** (`.github/workflows/release.yml`) runs when a pull request merges into `dev`. It re-runs the tests on the merge commit, picks the next version from the commits since the last `vX.Y.Z` tag, and publishes a GitHub release with grouped notes. Direct pushes to `dev` don't release.
+- **Release** (`.github/workflows/release.yml`) runs when a pull request merges into `dev` or `main`. A read-only job re-runs the tests on the merge commit and picks the next version from the commits since the last `vX.Y.Z` tag; a separate job, which runs no project code, publishes the GitHub release with grouped notes. Direct pushes don't release.
 
 | Change | How to get it |
 |---|---|

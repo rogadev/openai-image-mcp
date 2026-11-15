@@ -1,7 +1,9 @@
 name: Release
 
 # Publishes a GitHub release, tagged vX.Y.Z, each time a pull request merges
-# into dev. Direct pushes to dev don't release. .github/scripts/release_version.py
+# into dev or main with commits that haven't been released yet. Direct pushes
+# don't release, and a dev-to-main merge of work already released from dev
+# publishes nothing. .github/scripts/release_version.py
 # picks the version from the commits since the last tag: a feat: commit bumps
 # minor, anything else bumps patch, and the first release is pyproject.toml's
 # version (0.1.0). Major happens only when the merged pull request has the
@@ -14,7 +16,7 @@ name: Release
 on:
   pull_request:
     types: [closed]
-    branches: [dev]
+    branches: [dev, main]
 
 permissions: {}
 

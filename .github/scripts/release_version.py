@@ -9,9 +9,11 @@ Rules, applied to the commits since the last vX.Y.Z tag:
 - Anything else: bump patch.
 - No vX.Y.Z tag yet: release the version in pyproject.toml as is (or its next
   major, with the label).
+- No new commits since the last tag (for example, a dev-to-main merge of work
+  that was already released from dev): release nothing.
 
 Usage:
-    python release_version.py next [--major]   # prints X.Y.Z, or nothing if HEAD is already released
+    python release_version.py next [--major]   # prints X.Y.Z, or nothing if there's nothing new to release
     python release_version.py notes TAG        # prints Markdown release notes
 """
 
@@ -103,7 +105,10 @@ def main() -> int:
         if head_is_released():
             return 0
         previous = latest_tag()
-        print(next_version(previous, subjects_since(previous), args.major, pyproject_version()))
+        subjects = subjects_since(previous)
+        if previous and not subjects:
+            return 0
+        print(next_version(previous, subjects, args.major, pyproject_version()))
         return 0
 
     previous = latest_tag(f"{args.tag}^") if _tag_exists(args.tag) else latest_tag()

@@ -91,3 +91,13 @@ def test_merge_commits_are_ignored(repo):
     git(repo, "merge", "-q", "--no-ff", "dev", "-m", "Merge pull request #1 from o/dev")
     assert run_script(repo, "next") == "0.1.1"
     assert "Merge pull request" not in run_script(repo, "notes", "v0.1.1")
+
+
+def test_a_merge_with_nothing_new_releases_nothing(repo):
+    git(repo, "tag", "v0.1.0")
+    git(repo, "switch", "-q", "-c", "dev")
+    git(repo, "commit", "-q", "--allow-empty", "-m", "feat: on dev")
+    git(repo, "tag", "v0.2.0")
+    git(repo, "switch", "-q", "main")
+    git(repo, "merge", "-q", "--no-ff", "dev", "-m", "Merge pull request #2 from o/dev")
+    assert run_script(repo, "next") == "", "dev's work was already released as v0.2.0"
