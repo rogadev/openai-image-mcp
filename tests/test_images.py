@@ -195,11 +195,18 @@ def test_edit_reports_missing_files(tmp_path):
         call_edit(tmp_path, [tmp_path])
 
 
-def test_output_dir_follows_environment(monkeypatch, tmp_path):
+def test_output_dir_priority_env_then_saved_then_default(monkeypatch, tmp_path):
+    from openai_image_mcp import settings
+
     monkeypatch.delenv("IMAGE_OUTPUT_DIR", raising=False)
-    assert images.output_dir() == images.DEFAULT_OUTPUT_DIR
-    monkeypatch.setenv("IMAGE_OUTPUT_DIR", str(tmp_path))
-    assert images.output_dir() == tmp_path
+    assert images.configured_output_dir() == (images.default_output_dir(), "the built-in default")
+    assert images.default_output_dir().name == "Claude Images"
+
+    settings.save_setting("output_dir", str(tmp_path / "saved"))
+    assert images.configured_output_dir() == (tmp_path / "saved", "your saved setting")
+
+    monkeypatch.setenv("IMAGE_OUTPUT_DIR", str(tmp_path / "env"))
+    assert images.output_dir() == tmp_path / "env"
 
 
 def test_request_options_send_only_what_differs_from_defaults():

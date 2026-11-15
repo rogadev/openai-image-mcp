@@ -11,13 +11,13 @@ Where the setting comes from, highest priority first:
 3. "latest".
 """
 
-import json
 import os
 import re
 import time
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any
+
+from openai_image_mcp import settings
 
 LATEST = "latest"
 # Used only when OpenAI can't list models (for example, a restricted key).
@@ -90,31 +90,12 @@ def search(models: list[ImageModel], query: str | None) -> list[ImageModel]:
     return [m for m in models if all(term in m.id.lower() for term in terms)]
 
 
-def settings_path() -> Path:
-    if configured := os.environ.get("OPENAI_IMAGE_MCP_SETTINGS"):
-        return Path(configured)
-    base = os.environ.get("APPDATA") if os.name == "nt" else None
-    root = Path(base) if base else Path.home() / ".config"
-    return root / "openai-image-mcp" / "settings.json"
-
-
-def read_settings() -> dict:
-    try:
-        return json.loads(settings_path().read_text(encoding="utf-8"))
-    except (FileNotFoundError, json.JSONDecodeError):
-        return {}
-
-
 def saved_default() -> str:
-    return read_settings().get("default_model") or LATEST
+    return settings.read_settings().get("default_model") or LATEST
 
 
 def save_default(model: str) -> None:
-    path = settings_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    settings = read_settings()
-    settings["default_model"] = model
-    path.write_text(json.dumps(settings, indent=2) + "\n", encoding="utf-8")
+    settings.save_setting("default_model", model)
 
 
 def configured_default() -> tuple[str, str]:

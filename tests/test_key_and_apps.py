@@ -170,7 +170,7 @@ def test_uninstall_removes_everything_it_installed(monkeypatch, tmp_path, fake_k
     assert admin.uninstall(output.append) == 0
 
     assert fake_keyring.entries == {}
-    assert not admin.models.settings_path().exists()
+    assert not admin.settings.settings_path().exists()
     assert "mcpServers" not in json.loads(config.read_text(encoding="utf-8"))
     text = "\n".join(output)
     assert "Claude Code: removed." in text and "Key: removed" in text and KEY_A not in text
@@ -229,3 +229,50 @@ def test_check_api_key_classifies_every_openai_outcome(monkeypatch, raised, ok, 
     result = key.check_api_key(KEY_A, "gpt-image-test")
     assert (result.ok, result.key_valid) == (ok, key_valid)
     assert KEY_A not in result.message
+
+
+def test_folder_command_sets_shows_and_resets(tmp_path):
+    from openai_image_mcp import images
+
+    output = []
+    target = tmp_path / "My Art" / "AI"
+    assert admin.set_folder(f'"{target}"', output.append) == 0
+    assert target.is_dir() and list(target.iterdir()) == [], "the write probe is cleaned up"
+    assert images.output_dir() == target
+
+    admin.set_folder(None, output.append)
+    assert f"Images are saved to {target} (from your saved setting)." in output
+
+    assert admin.set_folder("default", output.append) == 0
+    assert images.output_dir() == images.default_output_dir()
+
+
+def test_folder_shortcuts_use_the_real_known_folders(monkeypatch, tmp_path):
+    from openai_image_mcp import images
+
+    monkeypatch.setattr(admin.settings, "known_folder", lambda name: tmp_path / f"known-{name}")
+    admin.set_folder("Desktop", lambda line: None)
+    assert images.output_dir() == tmp_path / "known-desktop"
+
+
+def test_folder_that_cant_be_written_changes_nothing(tmp_path):
+    from openai_image_mcp import images
+
+    blocker = tmp_path / "a-file"
+    blocker.write_text("not a folder")
+    output = []
+    assert admin.set_folder(str(blocker / "sub"), output.append) == 1
+    assert "Nothing was changed" in output[-1]
+    assert images.output_dir() == images.default_output_dir()
+
+
+def test_setup_asks_for_the_folder(monkeypatch, tmp_path):
+    from openai_image_mcp import images
+
+    key.save_api_key(KEY_A)
+    monkeypatch.setattr(admin, "register", lambda out: 0)
+    assert admin.setup(lambda line: None, ask=lambda prompt: str(tmp_path / "chosen")) == 0
+    assert images.output_dir() == tmp_path / "chosen"
+
+    assert admin.setup(lambda line: None, ask=lambda prompt: "") == 0
+    assert images.output_dir() == tmp_path / "chosen", "Enter keeps the current folder"
