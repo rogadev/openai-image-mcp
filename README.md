@@ -416,15 +416,16 @@ npx @modelcontextprotocol/inspector .venv\Scripts\openai-image-mcp.exe
 
 ### Branches and releases
 
-Work happens on `dev`. Changes reach `main` only through a pull request from `dev`, merged with a merge commit once CI is green.
+Work happens on short-lived feature branches. Each one reaches `dev` through a pull request, merged with a merge commit once CI is green, and **every pull request merged into `dev` publishes a release**. `main` is optional; a pull request into it must come from `dev`.
 
-- **CI** (`.github/workflows/ci.yml`) runs the tests on Windows for every pull request into `main` and every push to `dev`, and fails a pull request into `main` that doesn't come from `dev`.
-- **Release** (`.github/workflows/release.yml`) runs on every merge to `main`. It re-runs the tests, picks the next version from the commits since the last `vX.Y.Z` tag, and publishes a GitHub release with grouped notes.
+- **CI** (`.github/workflows/ci.yml`) runs the tests on Windows for every pull request into `dev` or `main` and every push to `dev`, and fails a pull request into `main` that doesn't come from `dev`.
+- **Release** (`.github/workflows/release.yml`) runs when a pull request merges into `dev`. It re-runs the tests on the merge commit, picks the next version from the commits since the last `vX.Y.Z` tag, and publishes a GitHub release with grouped notes. Direct pushes to `dev` don't release.
 
 | Change | How to get it |
 |---|---|
-| Patch (`1.2.3` to `1.2.4`) | The default: `fix:`, `docs:`, `chore:`, and any other commits. |
-| Minor (`1.2.3` to `1.3.0`) | At least one `feat:` commit since the last release. |
-| Major (`1.2.3` to `2.0.0`) | Add the `release:major` label to the `dev`-to-`main` pull request before merging. Nothing else bumps major, including a `!` or `BREAKING CHANGE` in a commit. |
+| First release | `v0.1.0`, the seed version in `pyproject.toml`. |
+| Patch (`0.1.0` to `0.1.1`) | The default: `fix:`, `docs:`, `chore:`, and any other commits. |
+| Minor (`0.1.0` to `0.2.0`) | At least one `feat:` commit since the last release. |
+| Major (`0.4.2` to `1.0.0`) | Add the `release:major` label to the pull request before merging. Nothing else bumps major, including a `!` or `BREAKING CHANGE` in a commit. |
 
-The tag is the version of record, so `pyproject.toml` keeps its seed version and nothing is committed back to `main`. A failed release can be re-run from the Actions tab; a commit that's already tagged publishes nothing.
+The tag is the version of record, so `pyproject.toml` keeps its seed version and nothing is committed back to `dev`. To retry a failed release, re-run the failed run from the Actions tab; a commit that's already tagged publishes nothing.

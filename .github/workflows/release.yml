@@ -1,15 +1,16 @@
 name: Release
 
-# Publishes a GitHub release, tagged vX.Y.Z, each time a change reaches main.
-# .github/scripts/release_version.py picks the version from the commits since
-# the last tag: a feat: commit bumps minor, anything else bumps patch. Major
-# happens only when the dev-to-main pull request has the release:major label.
-# The tag is the version of record; nothing is committed back to main.
+# Publishes a GitHub release, tagged vX.Y.Z, each time a pull request merges
+# into dev. Direct pushes to dev don't release. .github/scripts/release_version.py
+# picks the version from the commits since the last tag: a feat: commit bumps
+# minor, anything else bumps patch, and the first release is pyproject.toml's
+# version (0.1.0). Major happens only when the merged pull request has the
+# release:major label. The tag is the version of record; nothing is committed
+# back to the branch. To retry a failed release, re-run the failed workflow run.
 on:
-  push:
-    branches: [main]
-  # To publish again after a failed run. Only main publishes.
-  workflow_dispatch:
+  pull_request:
+    types: [closed]
+    branches: [dev]
 
 permissions: {}
 
@@ -19,14 +20,19 @@ concurrency:
 
 jobs:
   release:
-    if: github.ref == 'refs/heads/main'
+    # Merged (not just closed) pull requests from this repository only.
+    if: >-
+      github.event.pull_request.merged == true &&
+      github.event.pull_request.head.repo.full_name == github.repository
     runs-on: windows-latest
     permissions:
       contents: write # tags and releases
-      pull-requests: read # the release:major label
+    env:
+      MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ github.event.pull_request.merge_commit_sha }}
           fetch-depth: 0
           persist-credentials: false
 
@@ -38,31 +44,18 @@ jobs:
           uv sync --locked
           uv run pytest
 
-      - name: Check for the release:major label
-        id: label
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          labels=$(gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/pulls" \
-            --jq '[.[] | select(.base.ref == "main") | .labels[].name] | join(",")')
-          if [[ ",$labels," == *",release:major,"* ]]; then
-            echo "The pull request has release:major; bumping the major version."
-            echo "major=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "major=false" >> "$GITHUB_OUTPUT"
-          fi
-
       - name: Work out the version
         id: version
         shell: bash
         env:
-          MAJOR: ${{ steps.label.outputs.major }}
+          MAJOR: ${{ contains(github.event.pull_request.labels.*.name, 'release:major') }}
         run: |
           set -euo pipefail
           args=(next)
-          if [ "$MAJOR" = true ]; then args+=(--major); fi
+          if [ "$MAJOR" = true ]; then
+            echo "The pull request has release:major; bumping the major version."
+            args+=(--major)
+          fi
           version=$(uv run --no-project python .github/scripts/release_version.py "${args[@]}")
           if [ -z "$version" ]; then
             echo "This commit is already released; nothing to do."
@@ -87,5 +80,5 @@ jobs:
             exit 0
           fi
           uv run --no-project python .github/scripts/release_version.py notes "$TAG" --repo "$GITHUB_REPOSITORY" > "$RUNNER_TEMP/notes.md"
-          gh release create "$TAG" --target "$GITHUB_SHA" --title "$TAG" --notes-file "$RUNNER_TEMP/notes.md"
+          gh release create "$TAG" --target "$MERGE_SHA" --title "$TAG" --notes-file "$RUNNER_TEMP/notes.md"
           echo "Published $TAG."

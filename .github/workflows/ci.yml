@@ -1,10 +1,10 @@
 name: CI
 
-# Runs on every pull request into main and every push to dev. The "test" job
-# is the check branch protection requires before a dev-to-main merge.
+# Runs on every pull request into dev or main and every push to dev. The
+# "test" job is the check branch protection should require before a merge.
 on:
   pull_request:
-    branches: [main]
+    branches: [dev, main]
   push:
     branches: [dev]
   workflow_dispatch:
@@ -24,12 +24,13 @@ jobs:
       - name: Only dev merges into main
         env:
           EVENT: ${{ github.event_name }}
+          BASE: ${{ github.base_ref }}
           HEAD: ${{ github.head_ref }}
           HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
           REPO: ${{ github.repository }}
         run: |
-          if [ "$EVENT" != pull_request ]; then
-            echo "Not a pull request; nothing to check."
+          if [ "$EVENT" != pull_request ] || [ "$BASE" != main ]; then
+            echo "Not a pull request into main; nothing to check."
             exit 0
           fi
           if [ "$HEAD_REPO" != "$REPO" ] || [ "$HEAD" != dev ]; then
