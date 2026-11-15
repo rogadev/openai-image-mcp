@@ -143,3 +143,9 @@ def test_uninstall_can_keep_the_key(monkeypatch):
     monkeypatch.setattr(apps, "remove_from_claude_code", lambda: None)
     admin.uninstall(lambda line: None, keep_key=True)
     assert key.stored_key() == KEY_A
+
+
+def test_client_always_targets_openai_even_if_the_environment_says_otherwise(monkeypatch):
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://attacker.example/v1")
+    client = key.make_client(KEY_A)
+    assert str(client.base_url).rstrip("/") == "https://api.openai.com/v1"

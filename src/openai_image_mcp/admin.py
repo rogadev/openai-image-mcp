@@ -17,7 +17,7 @@ def _resolve_check_model(api_key: str) -> str:
     if setting != models.LATEST:
         return setting
     try:
-        client = openai.OpenAI(api_key=api_key, timeout=30, max_retries=1)
+        client = key.make_client(api_key)
         return models.pick_latest(models.fetch_image_models(client)) or models.FALLBACK_MODEL
     except openai.APIError:
         return models.FALLBACK_MODEL
@@ -73,7 +73,7 @@ def check(out: Printer = print) -> int:
 
 def list_models(query: str | None, out: Printer = print) -> int:
     stored = key.load_api_key()
-    client = openai.OpenAI(api_key=stored, timeout=30, max_retries=1)
+    client = key.make_client(stored)
     available = models.fetch_image_models(client)
     latest = models.pick_latest(available)
     setting, source = models.configured_default()
@@ -91,7 +91,7 @@ def list_models(query: str | None, out: Printer = print) -> int:
 
 def set_model(model: str, out: Printer = print) -> int:
     if model != models.LATEST:
-        client = openai.OpenAI(api_key=key.load_api_key(), timeout=30, max_retries=1)
+        client = key.make_client(key.load_api_key())
         ids = {m.id for m in models.fetch_image_models(client)}
         if model not in ids:
             out(f"{model} isn't an image model this key can use. Run `uv run manage.py models` to see them.")

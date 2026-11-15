@@ -7,7 +7,7 @@ keeps using that exact model until the pin is changed.
 
 Where the setting comes from, highest priority first:
 1. The IMAGE_MODEL environment variable in an app's server entry.
-2. The settings file written by `manage.py model` or the set_default_model tool.
+2. The settings file written by `manage.py model`.
 3. "latest".
 """
 

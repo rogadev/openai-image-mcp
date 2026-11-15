@@ -1,7 +1,6 @@
 import base64
 import io
 from datetime import datetime
-from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -126,30 +125,74 @@ def test_empty_response_is_an_error(tmp_path):
         images.save_results(SimpleNamespace(data=[]), "p", "png", tmp_path, NOW)
 
 
-def test_edit_sends_files_and_mask(tmp_path):
-    source = tmp_path / "in.png"
-    mask = tmp_path / "mask.png"
+def jpeg_bytes() -> bytes:
+    out = io.BytesIO()
+    PILImage.new("RGB", (64, 64), (10, 20, 30)).save(out, format="JPEG")
+    return out.getvalue()
+
+
+def call_edit(tmp_path, paths, mask_path=None, client=None):
+    return images.edit(
+        client or FakeClient(), "make it blue", [str(p) for p in paths], mask_path=mask_path and str(mask_path),
+        size="auto", quality="low", background="auto", output_format="png", n=1, model="m",
+        folder=tmp_path / "out", now=NOW,
+    )
+
+
+def test_edit_uploads_the_checked_bytes_with_the_right_type(tmp_path):
+    source, photo, mask = tmp_path / "in.png", tmp_path / "photo.JPG", tmp_path / "mask.png"
     source.write_bytes(png_bytes())
+    photo.write_bytes(jpeg_bytes())
     mask.write_bytes(png_bytes())
     client = FakeClient()
 
-    saved = images.edit(
-        client, "make it blue", [str(source)], mask_path=str(mask), size="auto", quality="low",
-        background="auto", output_format="png", n=1, model="m", folder=tmp_path / "out", now=NOW,
-    )
+    saved = call_edit(tmp_path, [source, photo], mask, client)
 
     assert saved[0].path.exists()
     _, kwargs = client.images.calls[0]
-    assert kwargs["image"].closed and kwargs["mask"].closed
-    assert Path(kwargs["image"].name) == source
+    assert kwargs["image"] == [("in.png", png_bytes(), "image/png"), ("photo.JPG", jpeg_bytes(), "image/jpeg")]
+    assert kwargs["mask"] == ("mask.png", png_bytes(), "image/png")
+
+
+@pytest.mark.parametrize(
+    ("name", "content", "reason"),
+    [
+        ("id_ed25519", b"-----BEGIN OPENSSH PRIVATE KEY-----", "allowed image type"),
+        ("notes.txt", b"hello", "allowed image type"),
+        ("secrets.png", b"sk-proj-not-really-an-image", "readable image"),
+        ("swapped.png", None, "allowed image type"),
+    ],
+)
+def test_edit_refuses_anything_that_isnt_an_allowed_image(tmp_path, name, content, reason):
+    path = tmp_path / name
+    path.write_bytes(jpeg_bytes() if content is None else content)
+    client = FakeClient()
+    with pytest.raises(images.ImageRequestError, match=reason):
+        call_edit(tmp_path, [path], client=client)
+    assert client.images.calls == [], "nothing may be uploaded"
+
+
+def test_edit_mask_must_be_png(tmp_path):
+    source, mask = tmp_path / "in.png", tmp_path / "mask.jpg"
+    source.write_bytes(png_bytes())
+    mask.write_bytes(jpeg_bytes())
+    with pytest.raises(images.ImageRequestError, match="allowed image type"):
+        call_edit(tmp_path, [source], mask)
+
+
+def test_edit_refuses_oversized_files(tmp_path, monkeypatch):
+    source = tmp_path / "in.png"
+    source.write_bytes(png_bytes())
+    monkeypatch.setattr(images, "MAX_SOURCE_BYTES", 10)
+    with pytest.raises(images.ImageRequestError, match="larger than"):
+        call_edit(tmp_path, [source])
 
 
 def test_edit_reports_missing_files(tmp_path):
-    with pytest.raises(images.ImageRequestError, match="don't exist"):
-        images.edit(
-            FakeClient(), "x", [str(tmp_path / "nope.png")], mask_path=None, size="auto", quality="low",
-            background="auto", output_format="png", n=1, model="m", folder=tmp_path, now=NOW,
-        )
+    with pytest.raises(images.ImageRequestError, match="isn't a file"):
+        call_edit(tmp_path, [tmp_path / "nope.png"])
+    with pytest.raises(images.ImageRequestError, match="isn't a file"):
+        call_edit(tmp_path, [tmp_path])
 
 
 def test_output_dir_follows_environment(monkeypatch, tmp_path):

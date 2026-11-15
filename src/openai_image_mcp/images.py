@@ -4,6 +4,8 @@ import base64
 import io
 import os
 import re
+import subprocess
+import sys
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
@@ -30,6 +32,47 @@ MAX_IMAGES_PER_CALL = 4
 
 class ImageRequestError(ValueError):
     """Raised for a request the server rejects before calling OpenAI."""
+
+
+# What edit_image may upload. Pillow format name -> (file extensions, MIME type).
+SOURCE_FORMATS = {
+    "PNG": ((".png",), "image/png"),
+    "JPEG": ((".jpg", ".jpeg"), "image/jpeg"),
+    "WEBP": ((".webp",), "image/webp"),
+}
+MASK_FORMATS = {"PNG": SOURCE_FORMATS["PNG"]}
+MAX_SOURCE_BYTES = 50 * 1024 * 1024
+
+
+def load_source_image(raw_path: str, formats: dict[str, tuple[tuple[str, ...], str]]) -> tuple[str, bytes, str]:
+    """Reads a local file for upload, but only if it really is an allowed image.
+
+    edit_image uploads files to OpenAI, so a path that a misled Claude passes in
+    (a key file, a document) must never leave the machine. The extension, the
+    size, and the decoded content all have to agree that it's an image, and the
+    bytes that were checked are the bytes that get sent.
+
+    Returns:
+        A (filename, bytes, MIME type) tuple, the form the OpenAI SDK uploads.
+    """
+    allowed = ", ".join(ext for exts, _ in formats.values() for ext in exts)
+    path = Path(raw_path).expanduser()
+    if not path.is_file():
+        raise ImageRequestError(f"{raw_path} isn't a file.")
+    if path.suffix.lower() not in {ext for exts, _ in formats.values() for ext in exts}:
+        raise ImageRequestError(f"{raw_path} isn't an allowed image type ({allowed}).")
+    if path.stat().st_size > MAX_SOURCE_BYTES:
+        raise ImageRequestError(f"{raw_path} is larger than {MAX_SOURCE_BYTES // (1024 * 1024)} MB.")
+    data = path.read_bytes()
+    try:
+        with PILImage.open(io.BytesIO(data)) as probe:
+            detected = probe.format
+            probe.verify()
+    except Exception as err:  # noqa: BLE001 - any decode failure means "not an image"
+        raise ImageRequestError(f"{raw_path} isn't a readable image.") from err
+    if detected not in formats or path.suffix.lower() not in formats[detected][0]:
+        raise ImageRequestError(f"{raw_path} isn't an allowed image type ({allowed}).")
+    return path.name, data, formats[detected][1]
 
 
 @dataclass(frozen=True)
@@ -119,6 +162,20 @@ def unique_paths(folder: Path, prompt: str, extension: str, count: int, now: dat
     return paths
 
 
+def open_in_viewer(path: Path) -> None:
+    """Opens a file this server just saved in the system's default image viewer.
+
+    Only ever called with paths save_results wrote, never with a path from the
+    tool's arguments, so it can't be used to launch anything else.
+    """
+    if os.name == "nt":
+        os.startfile(path)  # noqa: S606 - our own freshly written image file
+    elif sys.platform == "darwin":
+        subprocess.Popen(["open", str(path)])
+    else:
+        subprocess.Popen(["xdg-open", str(path)])
+
+
 def make_preview(image_bytes: bytes) -> bytes:
     """Downscales an image to a JPEG preview, flattening transparency onto white."""
     with PILImage.open(io.BytesIO(image_bytes)) as img:
@@ -190,27 +247,14 @@ def edit(
     validate_options(n, background, output_format)
     if not image_paths:
         raise ImageRequestError("Give at least one image path to edit.")
-    sources = [Path(p).expanduser() for p in image_paths]
-    missing = [str(p) for p in sources if not p.is_file()]
-    if mask_path and not Path(mask_path).expanduser().is_file():
-        missing.append(mask_path)
-    if missing:
-        raise ImageRequestError(f"These files don't exist: {', '.join(missing)}")
-
-    handles = [p.open("rb") for p in sources]
-    mask_handle = Path(mask_path).expanduser().open("rb") if mask_path else None
-    try:
-        kwargs: dict[str, Any] = {
-            "prompt": prompt,
-            "image": handles if len(handles) > 1 else handles[0],
-            **request_options(model, size, quality, background, output_format, n),
-        }
-        if mask_handle:
-            kwargs["mask"] = mask_handle
-        response = client.images.edit(**kwargs)
-    finally:
-        for handle in handles:
-            handle.close()
-        if mask_handle:
-            mask_handle.close()
+    sources = [load_source_image(p, SOURCE_FORMATS) for p in image_paths]
+    mask = load_source_image(mask_path, MASK_FORMATS) if mask_path else None
+    kwargs: dict[str, Any] = {
+        "prompt": prompt,
+        "image": sources if len(sources) > 1 else sources[0],
+        **request_options(model, size, quality, background, output_format, n),
+    }
+    if mask:
+        kwargs["mask"] = mask
+    response = client.images.edit(**kwargs)
     return save_results(response, prompt, output_format, folder, now)

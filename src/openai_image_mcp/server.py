@@ -3,7 +3,6 @@
 Runs over stdio: each Claude app starts it on demand and stops it on exit.
 """
 
-import os
 from datetime import datetime
 
 import openai
@@ -11,7 +10,7 @@ from mcp.server.mcpserver import Image, MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 
 from openai_image_mcp import images, models
-from openai_image_mcp.key import SETUP_HINT, MissingKeyError, load_api_key
+from openai_image_mcp.key import SETUP_HINT, MissingKeyError, load_api_key, make_client
 
 # Generation can take up to about two minutes for complex prompts.
 OPENAI_TIMEOUT_SECONDS = 300
@@ -23,7 +22,8 @@ server = MCPServer(
         "user's image folder at full resolution; the chat receives a smaller preview plus the "
         "saved path. Use quality 'low' for quick drafts. Each call costs the user money, so "
         "don't generate more images than asked for. By default the newest image model is used; "
-        "list_image_models shows what the user's key can use, and set_default_model pins one."
+        "list_image_models shows what the user's key can use. To change their saved default, the "
+        "user runs `uv run manage.py model <id>` themselves."
     ),
 )
 
@@ -35,13 +35,21 @@ def _client() -> openai.OpenAI:
         key = load_api_key()
     except MissingKeyError as err:
         raise ToolError(str(err)) from err
-    return openai.OpenAI(api_key=key, timeout=OPENAI_TIMEOUT_SECONDS, max_retries=1)
+    return make_client(key, timeout=OPENAI_TIMEOUT_SECONDS)
 
 
-def _to_content(saved: list[images.SavedImage], model: str) -> list[str | Image]:
+def _to_content(saved: list[images.SavedImage], model: str, opened: bool) -> list[str | Image]:
     lines = [f"Saved {len(saved)} image(s) with {model}:"]
-    lines += [f"- {item.path}" for item in saved]
-    lines.append("The previews below are downscaled; the files above are full resolution.")
+    for item in saved:
+        lines.append(f"- {item.path}")
+        lines.append(f"  Open: {item.path.as_uri()}")
+    lines.append(f"Folder: {saved[0].path.parent.as_uri()}")
+    if opened:
+        lines.append("Opened in the user's default image viewer.")
+    lines.append(
+        "The previews below are downscaled; the files above are full resolution. When you reply, "
+        "include each Open link as-is so the user can click it (a terminal can't show the image)."
+    )
     content: list[str | Image] = ["\n".join(lines)]
     content += [Image(data=item.preview_jpeg, format="jpeg") for item in saved]
     return content
@@ -58,11 +66,15 @@ def _openai_errors(err: Exception) -> ToolError:
     return ToolError(f"OpenAI returned an error: {err}")
 
 
-def _run_image_call(call, requested_model: str | None) -> list[str | Image]:
+def _run_image_call(call, requested_model: str | None, open_after: bool) -> list[str | Image]:
     client = _client()
     model = resolver.resolve(client, requested_model)
     try:
-        return _to_content(call(client, model), model)
+        saved = call(client, model)
+        if open_after:
+            for item in saved:
+                images.open_in_viewer(item.path)
+        return _to_content(saved, model, open_after)
     except images.ImageRequestError as err:
         raise ToolError(str(err)) from err
     except openai.APIError as err:
@@ -78,6 +90,7 @@ def generate_image(
     output_format: images.OutputFormat = "png",
     n: int = 1,
     model: str | None = None,
+    open_after: bool = False,
 ) -> list[str | Image]:
     """Generates images from a text prompt and saves them to the user's image folder.
 
@@ -91,6 +104,9 @@ def generate_image(
         n: Number of images, 1 to 4. Each one is billed.
         model: A model ID for this request only. Leave empty to use the user's default
             (the newest model unless they pinned one). See list_image_models.
+        open_after: Open each saved image in the user's default image viewer. Set it when the
+            user asks to see or open the result, which helps most in Claude Code, where the chat
+            is a terminal that can't display images.
     """
     return _run_image_call(
         lambda client, chosen: images.generate(
@@ -106,6 +122,7 @@ def generate_image(
             now=datetime.now(),
         ),
         model,
+        open_after,
     )
 
 
@@ -120,6 +137,7 @@ def edit_image(
     output_format: images.OutputFormat = "png",
     n: int = 1,
     model: str | None = None,
+    open_after: bool = False,
 ) -> list[str | Image]:
     """Edits existing local images, or combines them as references, and saves the result.
 
@@ -133,6 +151,9 @@ def edit_image(
         output_format: File format of the saved image.
         n: Number of results, 1 to 4. Each one is billed.
         model: A model ID for this request only. Leave empty to use the user's default.
+        open_after: Open each saved image in the user's default image viewer. Set it when the
+            user asks to see or open the result, which helps most in Claude Code, where the chat
+            is a terminal that can't display images.
     """
     return _run_image_call(
         lambda client, chosen: images.edit(
@@ -150,6 +171,7 @@ def edit_image(
             now=datetime.now(),
         ),
         model,
+        open_after,
     )
 
 
@@ -196,33 +218,6 @@ def list_image_models(query: str | None = None) -> str:
         query: Optional words to filter by, such as "2.5" or "flare".
     """
     return _model_overview(_client(), query)
-
-
-@server.tool()
-def set_default_model(model: str) -> str:
-    """Sets the model used when a request doesn't name one, and remembers it.
-
-    Only call this when the user asks to change or pin their default model.
-
-    Args:
-        model: "latest" to always use the newest model, or an exact model ID from
-            list_image_models to pin that model.
-    """
-    client = _client()
-    if model != models.LATEST:
-        try:
-            ids = {m.id for m in resolver.available(client, refresh=True)}
-        except openai.APIError as err:
-            raise _openai_errors(err) from err
-        if model not in ids:
-            raise ToolError(f"{model} isn't one of the image models this key can use. See list_image_models.")
-    models.save_default(model)
-    note = ""
-    if os.environ.get("IMAGE_MODEL"):
-        note = " Note: an IMAGE_MODEL environment variable is set for this app and takes priority."
-    if model == models.LATEST:
-        return "Default set to latest: each request uses the newest image model available." + note
-    return f"Default pinned to {model}. It stays until you change it." + note
 
 
 def main() -> None:

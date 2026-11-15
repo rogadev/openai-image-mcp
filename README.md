@@ -123,7 +123,7 @@ This shows whether a key is stored and accepted by OpenAI, which model is the de
 - **Claude Code:** start a new session (a session that was already open won't see the new tool) and ask: *"Generate a low-quality 1024x1024 image of a lighthouse at dusk."*
 - **Claude Desktop:** in the message box, select **+**, then **Connectors**, and check that `openai-images` is listed. Then ask for the same image.
 
-Approve the tool when Claude asks. After 10 to 60 seconds you should see the image, and the file should be in `Pictures\Claude Images`.
+Approve the tool when Claude asks. After 10 to 60 seconds the image is saved in `Pictures\Claude Images`. See [Viewing your images](#viewing-your-images) for how it shows up in each app.
 
 <details>
 <summary>Setting up by hand instead</summary>
@@ -170,22 +170,29 @@ Prompting tips:
 - **For edits, give the full file path** and say exactly what should change and what should stay the same.
 - **Iterate.** Claude sees each result, so "warmer colors" or "zoom out a bit" works well.
 
+### Viewing your images
+
+- **Claude Desktop** shows the image right in the conversation, inside the tool's result.
+- **Claude Code** runs in a terminal, which can't display pictures. Claude still sees the image (so it can describe or refine it), and its reply includes a link for each file, such as `file:///C:/Users/you/Pictures/Claude%20Images/2026-11-15_143205_a-red-fox.png`. In Windows Terminal, Ctrl+click the link to open the image in your default viewer. You can also say **"and open it"** in your request, and the server opens each new image for you as soon as it's saved.
+- **Either app:** every image is in `Pictures\Claude Images`, and the reply includes a link to that folder too.
+
 ## Choosing a model
 
 **By default, the server always uses OpenAI's newest image model.** Each time it needs a model, it checks which image models your key can use (once an hour at most) and picks the newest one. When OpenAI releases a new model, you get it automatically, with nothing to update. Among variants of the newest version, it prefers the fast everyday one (for example, Flare over Sunburst).
 
-You can change that any time, either by asking Claude or from the command line.
+You can change that any time.
 
 | You want to | Ask Claude | Or run |
 |---|---|---|
 | See the models your key can use | "Which image models can I use?" | `uv run manage.py models` |
 | Search them | "Show me the 2.5 image models" | `uv run manage.py models 2.5` |
-| Pin one as your default | "Always use gpt-image-2.5-flare" | `uv run manage.py model gpt-image-2.5-flare` |
-| Go back to the newest | "Go back to the latest model" | `uv run manage.py model latest` |
 | Use a model for one image only | "Make this one with gpt-image-2.6-sunburst" | |
+| Pin one as your default | | `uv run manage.py model gpt-image-2.5-flare` |
+| Go back to the newest | | `uv run manage.py model latest` |
 
 A few things worth knowing:
 
+- **Only you can change the saved default.** Claude can list models and use any of them for a single image, but changing the default is a command you run yourself. That way nothing Claude reads (a web page, a document) can quietly switch you to a different or pricier model for every future image.
 - **Pinning is a choice, not a lock-in.** A pinned model stays your default until you change it, even after newer models come out.
 - **Dated IDs are fixed snapshots.** An ID such as `gpt-image-2-2026-04-01` never changes behavior; a plain ID such as `gpt-image-2.6-flare` may get quiet improvements from OpenAI.
 - **Older models may not support every option.** The server only sends the options you ask for, so the defaults work with any model. If you ask an old model for something it can't do (for example, a transparent background), OpenAI says so and Claude passes the message on.
@@ -197,7 +204,7 @@ A few things worth knowing:
 
 Your key is stored in **Windows Credential Manager** under the name `openai-image-mcp`, encrypted with your Windows login. It isn't written to any file in this project or in the Claude apps' config. You can see it in **Control Panel**, then **Credential Manager**, then **Windows Credentials**.
 
-The server reads the key from there at the moment it sends a request, and sends it only to `api.openai.com`. It never appears in the chat. Anything running as your Windows user could also read it, which is true of any key stored on your computer, so keep the usual protections (an up-to-date system, no untrusted programs).
+The server reads the key from there at the moment it sends a request, and sends it only to `https://api.openai.com/v1`. That address is built into the code, so no setting (such as an `OPENAI_BASE_URL` environment variable) can redirect the key somewhere else. The key never appears in the chat. Anything running as your Windows user could also read it, which is true of any key stored on your computer, so keep the usual protections (an up-to-date system, no untrusted programs).
 
 ### Replacing an expired or revoked key
 
@@ -336,6 +343,7 @@ Creates images from a text prompt.
 | `output_format` | string | `"png"` | `"png"`, `"jpeg"`, or `"webp"`. |
 | `n` | integer | `1` | 1 to 4 images. Each is billed. |
 | `model` | string | your default | A model ID for this request only. |
+| `open_after` | boolean | `false` | Open each saved image in your default image viewer. |
 
 #### `edit_image`
 
@@ -343,26 +351,24 @@ Edits local images, or combines several as references. Takes the same options as
 
 | Parameter | Type | Notes |
 |---|---|---|
-| `image_paths` | list of strings | Full paths to one or more local PNG, JPEG, or WebP files. |
+| `image_paths` | list of strings | Full paths to one or more local PNG, JPEG, or WebP files, each up to 50 MB. |
 | `mask_path` | string, optional | A PNG the same size as the first image. Its transparent areas mark where to edit. |
+
+Because this tool uploads files to OpenAI, it checks every file before sending it: the extension must be `.png`, `.jpg`, `.jpeg`, or `.webp`, the file must actually open as that kind of image, and it must be 50 MB or less. Anything else (a document, a key file, a renamed file) is refused and never leaves your computer.
 
 #### `list_image_models`
 
 Lists the image models your key can use, newest first, marking the newest and your current default. Takes an optional `query` to filter by, such as `"2.5"` or `"flare"`.
 
-#### `set_default_model`
-
-Saves your default model: `"latest"`, or an exact ID from `list_image_models`. Claude only calls it when you ask to change your default.
-
 #### What an image call returns
 
-A text block listing the full paths of the saved files and the model used, followed by one JPEG preview per image. If something goes wrong (a bad size, a missing or rejected key, an OpenAI error), the tool returns a readable error instead, and Claude can explain it or retry.
+A text block with the model used and, for each saved file, its full path and a clickable `file:///` link, plus a link to the folder. Then one JPEG preview per image. If something goes wrong (a bad size, a missing or rejected key, an OpenAI error), the tool returns a readable error instead, and Claude can explain it or retry.
 
 ## Development
 
 ```text
 src/openai_image_mcp/
-  server.py   MCP server and its four tools
+  server.py   MCP server and its three tools
   images.py   OpenAI image calls, validation, file naming, previews
   models.py   Image model discovery, "latest" selection, saved default
   key.py      Stores, checks, and removes the API key

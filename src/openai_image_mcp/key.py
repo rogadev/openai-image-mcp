@@ -16,6 +16,14 @@ KEYRING_USERNAME = "api-key"
 
 SETUP_HINT = "run `uv run manage.py key` in the openai-image-mcp folder"
 
+# The only place the key is ever sent. Fixed here rather than read from
+# OPENAI_BASE_URL, so a changed environment can't redirect the key elsewhere.
+OPENAI_API_URL = "https://api.openai.com/v1"
+
+
+def make_client(api_key: str, timeout: float = 30) -> openai.OpenAI:
+    return openai.OpenAI(api_key=api_key, base_url=OPENAI_API_URL, timeout=timeout, max_retries=1)
+
 
 class MissingKeyError(RuntimeError):
     """Raised when no API key is stored in the credential store or the environment."""
@@ -81,7 +89,7 @@ class KeyCheck:
 
 def check_api_key(key: str, model: str) -> KeyCheck:
     """Asks OpenAI whether the key works and can see the image model. Costs nothing."""
-    client = openai.OpenAI(api_key=key, timeout=30, max_retries=1)
+    client = make_client(key)
     try:
         client.models.retrieve(model)
     except openai.AuthenticationError:
