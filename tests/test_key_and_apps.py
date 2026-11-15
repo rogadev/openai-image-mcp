@@ -188,3 +188,44 @@ def test_client_always_targets_openai_even_if_the_environment_says_otherwise(mon
     monkeypatch.setenv("OPENAI_BASE_URL", "https://attacker.example/v1")
     client = key.make_client(KEY_A)
     assert str(client.base_url).rstrip("/") == "https://api.openai.com/v1"
+
+
+def _api_error(cls, status):
+    import httpx2 as httpx
+
+    request = httpx.Request("GET", "https://api.openai.com/v1/models/m")
+    return cls("error", response=httpx.Response(status, request=request), body=None)
+
+
+@pytest.mark.parametrize(
+    ("raised", "ok", "key_valid"),
+    [
+        (None, True, True),
+        ("auth", False, False),
+        ("not_found", False, True),
+        ("permission", True, True),
+        ("connection", False, False),
+        ("server", False, False),
+    ],
+)
+def test_check_api_key_classifies_every_openai_outcome(monkeypatch, raised, ok, key_valid):
+    import httpx2 as httpx
+    import openai
+
+    errors = {
+        "auth": lambda: _api_error(openai.AuthenticationError, 401),
+        "not_found": lambda: _api_error(openai.NotFoundError, 404),
+        "permission": lambda: _api_error(openai.PermissionDeniedError, 403),
+        "connection": lambda: openai.APIConnectionError(request=httpx.Request("GET", "https://api.openai.com")),
+        "server": lambda: _api_error(openai.InternalServerError, 500),
+    }
+
+    class FakeModels:
+        def retrieve(self, model):
+            if raised:
+                raise errors[raised]()
+
+    monkeypatch.setattr(key, "make_client", lambda api_key: type("C", (), {"models": FakeModels()})())
+    result = key.check_api_key(KEY_A, "gpt-image-test")
+    assert (result.ok, result.key_valid) == (ok, key_valid)
+    assert KEY_A not in result.message

@@ -108,8 +108,9 @@ class KeyCheck:
     ok: bool
     """Ready for image requests."""
     message: str
-    key_valid: bool
-    """OpenAI confirmed the key itself is genuine, even if it can't use the model yet."""
+    key_valid: bool = False
+    """OpenAI confirmed the key itself is genuine, even if it can't use the model yet.
+    Defaults to False so a result that forgets to set it never gets a key saved."""
 
 
 def check_api_key(key: str, model: str) -> KeyCheck:
@@ -124,6 +125,7 @@ def check_api_key(key: str, model: str) -> KeyCheck:
             False,
             f"The key works, but it can't use {model}. Complete Organization Verification on the "
             "OpenAI platform, or check that the key's project has access to image models.",
+            True,
         )
     except openai.PermissionDeniedError:
         return KeyCheck(
