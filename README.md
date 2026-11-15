@@ -469,3 +469,7 @@ Work reaches `dev` through pull requests from short-lived feature branches (or d
 | Major (`0.4.2` to `1.0.0`) | Add the `release:major` label to the pull request before merging. Nothing else bumps major, including a `!` or `BREAKING CHANGE` in a commit. |
 
 The tag is the version of record, so `pyproject.toml` keeps its seed version and nothing is committed back to `dev`. To retry a failed release, re-run the failed run from the Actions tab; a commit that's already tagged publishes nothing.
+
+## License
+
+[MIT](LICENSE). Free to use, change, and share.
