@@ -104,7 +104,7 @@ uv run manage.py setup
 
 Setup does three things:
 
-1. **Asks for your API key.** Paste it at the prompt (Ctrl+V or right-click); it stays hidden. Setup asks OpenAI whether the key works before saving it, then stores it in Windows Credential Manager.
+1. **Asks for your API key.** Paste it at the prompt; it stays hidden, and setup tells you how many characters it received. If Ctrl+V does nothing (common in the older Windows PowerShell window), right-click to paste. Setup asks OpenAI whether the key works before saving it, then stores it in Windows Credential Manager.
 2. **Adds the server to Claude Code** for all your projects, if Claude Code is installed.
 3. **Adds the server to Claude Desktop,** if it finds Claude Desktop's config file. It backs up the file first, as `claude_desktop_config.json.bak-openai-image-mcp`.
 

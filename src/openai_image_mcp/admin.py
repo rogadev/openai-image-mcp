@@ -26,14 +26,19 @@ def _resolve_check_model(api_key: str) -> str:
 def set_key(out: Printer = print, read_secret: Callable[[str], str] = getpass.getpass, check: bool = True) -> int:
     out("Paste your OpenAI API key and press Enter. It stays hidden while you type or paste.")
     new_key = read_secret("OpenAI API key: ").strip()
-    if not key.looks_like_openai_key(new_key):
-        out("That doesn't look like an OpenAI API key, which starts with 'sk-'. Nothing was saved.")
+    if problem := key.key_problem(new_key):
+        out(f"{problem} Nothing was saved.")
         return 1
+    out(key.paste_summary(new_key))
     if check:
         result = key.check_api_key(new_key, _resolve_check_model(new_key))
         out(result.message)
         if not result.ok and "rejected" in result.message:
-            out("Nothing was saved. Create a new key at https://platform.openai.com/api-keys and try again.")
+            out(
+                "Nothing was saved. OpenAI shows a full key only once, when it's created; copy it from "
+                "that pop-up at https://platform.openai.com/api-keys (the key list shows only names and "
+                "masked keys)."
+            )
             return 1
     replacing = key.stored_key() is not None
     key.save_api_key(new_key)

@@ -72,8 +72,27 @@ def save_api_key(key: str) -> None:
     keyring.set_password(KEYRING_SERVICE, KEYRING_USERNAME, key)
 
 
-def looks_like_openai_key(key: str) -> bool:
-    return key.startswith("sk-") and len(key) >= 40 and not any(c.isspace() for c in key)
+def key_problem(key: str) -> str | None:
+    """Catches pastes that can't be a key, before bothering OpenAI.
+
+    OpenAI doesn't document a key format, so this deliberately doesn't require
+    the usual "sk-" prefix: whether a key is valid is OpenAI's call, made by
+    check_api_key. Today's keys start with "sk-" and run about 160 characters.
+    """
+    if not key:
+        return (
+            "Nothing was pasted. In the older Windows PowerShell window, Ctrl+V may not paste into "
+            "a hidden prompt; right-click to paste instead."
+        )
+    if any(c.isspace() for c in key):
+        return "The pasted text contains spaces or line breaks, so it can't be a single key."
+    return None
+
+
+def paste_summary(key: str) -> str:
+    """Describes what was pasted without revealing it."""
+    prefix_note = "starts with sk-" if key.startswith("sk-") else "doesn't start with sk-, as OpenAI keys usually do"
+    return f"Received {len(key)} characters; it {prefix_note}."
 
 
 def describe_key(key: str) -> str:

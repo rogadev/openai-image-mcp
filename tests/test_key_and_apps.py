@@ -27,11 +27,18 @@ def test_delete_removes_every_copy(fake_keyring):
 
 
 @pytest.mark.parametrize(
-    ("candidate", "ok"),
-    [(KEY_A, True), ("abc_defg1234567890xy", False), ("sk-short", False), ("sk-" + "a" * 40 + " x", False)],
+    ("candidate", "problem"),
+    [(KEY_A, None), ("future-format-key-without-sk", None), ("", "Nothing was pasted"), ("sk-a b", "spaces")],
 )
-def test_looks_like_openai_key(candidate, ok):
-    assert key.looks_like_openai_key(candidate) is ok
+def test_key_problem_only_rejects_impossible_pastes(candidate, problem):
+    found = key.key_problem(candidate)
+    assert (found is None) if problem is None else (problem in found)
+
+
+def test_paste_summary_reports_length_and_prefix_only():
+    assert key.paste_summary(KEY_A) == f"Received {len(KEY_A)} characters; it starts with sk-."
+    summary = key.paste_summary("abc_defg1234567890xy")
+    assert "20 characters" in summary and "doesn't start with sk-" in summary and "abc" not in summary
 
 
 def test_describe_key_never_shows_the_whole_key():
@@ -48,10 +55,16 @@ def run_set_key(monkeypatch, secret, check_result=None):
     return code, "\n".join(output)
 
 
-def test_set_key_rejects_text_that_isnt_a_key(monkeypatch):
-    code, out = run_set_key(monkeypatch, "abc_defg1234567890xy")
-    assert code == 1 and "Nothing was saved" in out
+def test_set_key_rejects_an_empty_paste(monkeypatch):
+    code, out = run_set_key(monkeypatch, "")
+    assert code == 1 and "right-click" in out and "Nothing was saved" in out
     assert key.stored_key() is None
+
+
+def test_set_key_lets_openai_judge_unusual_formats(monkeypatch):
+    code, out = run_set_key(monkeypatch, "abc_defg1234567890xy", key.KeyCheck(False, "OpenAI rejected this key."))
+    assert code == 1 and "20 characters" in out and "only once" in out
+    assert "abc_defg" not in out and key.stored_key() is None
 
 
 def test_set_key_refuses_a_key_openai_rejects(monkeypatch):
